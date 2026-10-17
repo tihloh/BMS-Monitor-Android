@@ -37,6 +37,7 @@ import java.util.Set;
 
 public final class MainActivity extends Activity implements BleClient.Listener, ReleaseUpdater.Callback {
     private static final int PERMISSIONS = 10, BLUETOOTH_ENABLE = 11;
+    private static final String GENTAI_MAC = "0B:23:EB:D7:03:9E";
     private static final int NAVY = Color.rgb(27, 43, 58);
     private static final int MUTED = Color.rgb(99, 116, 132);
     private static final int CYAN = Color.rgb(0, 124, 145);
@@ -54,6 +55,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
+    private boolean pendingDirectConnect;
     private int visibleCount;
 
     @Override public void onCreate(Bundle saved) {
@@ -101,8 +103,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionCard.addView(status, below(0, 5));
         root.addView(connectionCard, below(0, 15));
 
+        Button connectGentai = button("Connect to ECO039E", true);
+        connectGentai.setTextSize(15);
+        connectGentai.setOnClickListener(v -> connectKnownGentai());
+        root.addView(connectGentai, below(0, 12));
+
         LinearLayout actions = horizontal();
-        scanButton = button("Scan / Connect", true);
+        scanButton = button("Scan all Bluetooth devices", false);
         scanButton.setOnClickListener(v -> beginScan());
         disconnectButton = button("Disconnect", false);
         disconnectButton.setOnClickListener(v -> {
@@ -145,7 +152,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setSingleLine(true);
         manualMac.setTextSize(13);
         manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
-        manualMac.setText(getPreferences(0).getString("last_bms", ""));
+        manualMac.setText(getPreferences(0).getString("last_bms", GENTAI_MAC));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
         manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
@@ -238,6 +245,30 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         root.addView(footer, below(0, 15));
     }
 
+    /** Skip BLE advertisements when the known Gentai address is available. */
+    private void connectKnownGentai() {
+        if (Build.VERSION.SDK_INT >= 31 &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            pendingDirectConnect = true;
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSIONS);
+            status.setText("Allow Nearby devices to connect to ECO039E.");
+            return;
+        }
+        if (!ble.bluetoothEnabled()) {
+            pendingDirectConnect = true;
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
+            status.setText("Turn on Bluetooth to connect to ECO039E.");
+            return;
+        }
+        pendingDirectConnect = false;
+        String saved = getPreferences(0).getString("last_bms", GENTAI_MAC);
+        if (saved == null || !saved.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) saved = GENTAI_MAC;
+        manualMac.setText(saved);
+        status.setText("Connecting directly to ECO039E (" + saved + ")...");
+        onLog("Trying direct BLE GATT connection to known Gentai address: " + saved);
+        ble.connectByAddress(saved);
+    }
+
     /** Requires complete BLE scan privileges; no physical location data is collected. */
     private void beginScan() {
         java.util.ArrayList<String> missing = new java.util.ArrayList<>();
@@ -321,7 +352,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         if (code == PERMISSIONS) {
             boolean granted = results.length == permissions.length && results.length > 0;
             for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
-            if (granted) beginScan();
+            if (granted) {
+                if (pendingDirectConnect) connectKnownGentai();
+                else beginScan();
+            }
             else {
                 status.setText("Bluetooth scan permissions denied.");
                 scanHint.setText("Grant Nearby devices and precise Location in Android App permissions.");
@@ -332,7 +366,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == BLUETOOTH_ENABLE) {
-            if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
+            if (res == RESULT_OK || ble.bluetoothEnabled()) {
+                if (pendingDirectConnect) connectKnownGentai();
+                else beginScan();
+            }
             else status.setText("Bluetooth must be enabled to detect ECO039E.");
         }
     }
@@ -380,7 +417,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 if (manualMac != null) manualMac.setText(device.getAddress());
                 ble.connect(device);
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan all Bluetooth devices");
             });
             if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
             else deviceList.addView(choose, below(0, 6));
@@ -392,10 +429,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (scanButton == null) return;
             scanButton.setEnabled(true);
-            scanButton.setText("Scan / Connect");
+            scanButton.setText("Scan all Bluetooth devices");
             progress.setVisibility(View.GONE);
             if (visibleCount == 0 && !ble.isReady()) {
-                scanHint.setText("Android returned no advertisements. Check precise Location permission and Location switch, then retry. Test with nRF Connect if needed.");
+                scanHint.setText("No devices received. Try Connect to ECO039E above. If that fails, copy the diagnostics log below.");
                 status.setText("No Bluetooth LE advertisements received.");
             } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
                 scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
@@ -492,7 +529,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         b.setTextColor(primary ? Color.WHITE : NAVY);
         b.setBackground(background(primary ? CYAN : Color.rgb(232, 240, 244), 11, 0));
         b.setPadding(dp(9), dp(4), dp(9), dp(4));
-        b.setMinHeight(dp(44));
+        b.setMinHeight(dp(46));
         return b;
     }
     private GradientDrawable background(int fill, int radius, int stroke) {
