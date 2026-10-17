@@ -45,5 +45,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built debug APK for testing. Not a signed production release." --prerelease --target main
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          VERSION_NAME=$("$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | sed -n "s/.*versionName='\\([^']*\\)'.*/\\1/p" | head -1)
+          VERSION_CODE=$("$AAPT" dump badging app/build/outputs/apk/debug/app-debug.apk | sed -n "s/.*versionCode='\\([^']*\\)'.*/\\1/p" | head -1)
+          [[ "$VERSION_NAME" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || (echo "APK has invalid version: $VERSION_NAME" && exit 1)
+          [[ "$VERSION_CODE" =~ ^[0-9]+$ ]] || (echo "APK has invalid versionCode: $VERSION_CODE" && exit 1)
+          TAG="v$VERSION_NAME"
+          VERSIONED_APK="BMS-Monitor-$TAG-debug.apk"
+          cp BMS-Monitor-debug.apk "$VERSIONED_APK"
+          # A semver tag is essential: in-app and background update checkers compare release versions.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "$TAG already exists; keep the previously published version immutable."
+          else
+            gh release create "$TAG" "$VERSIONED_APK" --title "BMS Monitor $TAG (experimental)" --notes "Experimental debug APK, versionCode $VERSION_CODE. Not signed for reliable in-place updates. Android may require uninstalling an earlier experimental APK. Use the stable signed-release workflow for reliable updates." --prerelease --target "$GITHUB_SHA"
+          fi
+          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Rolling debug build." --prerelease --target "$GITHUB_SHA"
           gh release upload experimental-latest BMS-Monitor-debug.apk --clobber
+          gh release edit experimental-latest --title "Experimental APK (latest: $TAG)" --notes "Current experimental APK: $TAG (versionCode $VERSION_CODE). Debug builds may have different signing keys. Versioned prereleases allow in-app update detection."

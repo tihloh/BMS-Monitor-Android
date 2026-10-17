@@ -2,7 +2,13 @@
 
 Experimental **read-only** Gentai/ECO-style Bluetooth battery monitor for Android 8.0 and later.
 
-## Version 0.2.0
+## Version 0.3.3
+- Fixed update detection: GitHub Actions now publishes a semver-tagged experimental pre-release for each new version, allowing older apps to discover an update.
+- Debug builds check versioned experimental prereleases; signed builds only check stable signed releases.
+- Debug APK downloads are opened in the browser rather than attempting an incompatible in-place installation. The POS-style in-app installer remains enabled for signed versions.
+- Background update checks now recognize experimental prereleases on debug installs.
+
+## Previous features (0.2.x)
 - BLE scanner with explicit nearby-device permissions, scan progress, signal strength, and diagnostic messages.
 - Connects to observed Gentai `ECO039E` / `BMC1_039E` device using service `0x0001`, write `0x0002`, notify `0x0003`.
 - Decodes fragmented BLE telemetry packets: voltage, current, power, SOC, remaining/rated capacity and compatible cell voltages.
@@ -13,7 +19,7 @@ Experimental **read-only** Gentai/ECO-style Bluetooth battery monitor for Androi
 ## APK
 [Get the latest experimental APK](https://github.com/tihloh/BMS-Monitor-Android/releases/tag/experimental-latest).
 
-**Important:** Experimental debug APKs may require uninstall/reinstall between versions because CI signs them with ephemeral debug certificates. To activate in-place auto-updating, set up stable signing and publish a versioned release. See [docs/INSTALL_AND_UPDATES.md](docs/INSTALL_AND_UPDATES.md).
+**Important:** The checker now detects experimental versioned APK releases. **Detection does not mean Android can replace a debug APK in place.** Debug APKs may require uninstall/reinstall because GitHub Actions signs them with ephemeral debug certificates. To activate in-place auto-updating, set up stable signing and publish a versioned release. See [docs/INSTALL_AND_UPDATES.md](docs/INSTALL_AND_UPDATES.md).
 
 ## Device
 - Primary BLE service: `00000001-0000-1000-8000-00805f9b34fb`

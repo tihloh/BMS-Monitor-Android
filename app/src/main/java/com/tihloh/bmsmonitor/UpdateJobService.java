@@ -83,7 +83,7 @@ public final class UpdateJobService extends JobService {
             for (int i=0;i<releases.length();i++) {
                 JSONObject release = releases.optJSONObject(i);
                 if (release == null || release.optBoolean("draft") ||
-                        release.optBoolean("prerelease")) continue;
+                        (release.optBoolean("prerelease") && !BuildConfig.DEBUG)) continue;
                 String version = release.optString("tag_name").replaceFirst("^v","");
                 if (!version.matches("\\d+\\.\\d+\\.\\d+")) continue;
                 JSONArray assets = release.optJSONArray("assets");

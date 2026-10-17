@@ -8,6 +8,15 @@
 5. When discovery fails, the UI displays actionable troubleshooting status. Tap **Copy log** to report a problem.
 6. Check the on-screen **Permissions / Location settings** help and **Bluetooth diagnostics**. The settings shortcut explains how to grant precise Location and Nearby devices permission. Confirm Gentai/nRF Connect isn't maintaining an active connection.
 
+## Finding updates in experimental builds (fixed in v0.3.3)
+Previous versions checked only semver release tags, while CI only updated the `experimental-latest` rolling tag. Update discovery always returned "No published versioned releases found." Starting v0.3.3, the CI creates a separate `vX.Y.Z` **prerelease** every time the version changes. This means even the older app's manual Check for updates can find the newer APK.
+
+- Experimental debug builds check **prerelease** tags; production signed builds ignore prereleases.
+- In an experimental build, tapping **Get experimental APK** opens GitHub for manual installation because CI's ephemeral debug signing keys cannot guarantee an in-place upgrade.
+- The background update job checks the appropriate release channel and posts a notification for a newer version (notification permission required on Android 13+).
+- After the project has a safely backed-up permanent signing key configured as GitHub Actions secrets, distribute properly signed stable releases for POS-style in-app updates.
+- **Increase versionName and versionCode for each new binary release**; reusing a version will not trigger an update prompt.
+
 ## APK builds
 - **Build Android APK** runs automatically on pull requests and pushes to main; it generates an experimental debug APK.
 - Debug APK: [experimental-latest](https://github.com/tihloh/BMS-Monitor-Android/releases/tag/experimental-latest).
