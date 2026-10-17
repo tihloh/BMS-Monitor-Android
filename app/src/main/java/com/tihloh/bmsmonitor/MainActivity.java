@@ -243,7 +243,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         // We do not use neverForLocation: it may filter BLE battery advertisements.
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             status.setText("Allow Precise Location so Android can return BLE advertisements.");
-            requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSIONS);
+            requestPermissions(Build.VERSION.SDK_INT >= 31
+                    ? new String[]{Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION}
+                    : new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSIONS);
             return;
         }
         LocationManager location = (LocationManager) getSystemService(LOCATION_SERVICE);
