@@ -75,18 +75,16 @@ public final class BleClient {
         handler.post(() -> listener.onLog(value));
     }
 
-    private final ScanCallback scanCallback = new ScanCallback() {
-        @Override public void onScanResult(int callbackType, ScanResult result) {
-            String name = null;
-            if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) {
-                try { name = result.getDevice().getName(); }
-                catch (SecurityException ignored) { }
-            }
-            final String finalName = name == null || name.isEmpty() ? "Unknown BLE device" : name;
+    private void recordScanResult(ScanResult result) {
+        if (!scanning || result == null || result.getDevice() == null) return;
+        try {
+            String name = result.getScanRecord() == null ? null : result.getScanRecord().getDeviceName();
+            if (name == null || name.isEmpty()) name = result.getDevice().getName();
+            final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
-            boolean likely = finalName.toLowerCase(java.util.Locale.US).matches(".*(eco|bms|bmc|jbd|xiaoxiang|gentai).*");
+            boolean likely = finalName.toLowerCase(java.util.Locale.US)
+                    .matches(".*(eco|bms|bmc|jbd|xiaoxiang|gentai).*");
             if (result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null) {
                 for (android.os.ParcelUuid uuid : result.getScanRecord().getServiceUuids()) {
                     String u = uuid.getUuid().toString().substring(0, 8);
@@ -96,12 +94,33 @@ public final class BleClient {
             final boolean likelyBms = likely;
             discoveredCount++;
             handler.post(() -> listener.onDevice(device, finalName, rssi, likelyBms));
+        } catch (SecurityException e) {
+            log("Bluetooth/Nearby Devices permission blocked scan results");
+        }
+    }
+
+    private final ScanCallback scanCallback = new ScanCallback() {
+        @Override public void onScanResult(int callbackType, ScanResult result) {
+            recordScanResult(result);
+        }
+
+        @Override public void onBatchScanResults(List<ScanResult> results) {
+            for (ScanResult result : results) recordScanResult(result);
         }
 
         @Override public void onScanFailed(int errorCode) {
             scanning = false;
-            log("Android BLE scan failed: code " + errorCode);
-            status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
+            scanner = null;
+            handler.removeCallbacks(stopScanTask);
+            String cause = errorCode == ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED
+                    ? "BLE scanner registration failed; toggle Bluetooth or reboot"
+                    : errorCode == ScanCallback.SCAN_FAILED_SCANNING_TOO_FREQUENTLY
+                    ? "Too many scans; wait about 30 seconds before trying again"
+                    : errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                    ? "A previous scan is still active"
+                    : "Android Bluetooth scanner error " + errorCode;
+            log("Scan failed (" + errorCode + "): " + cause);
+            status(cause, false);
             handler.post(listener::onScanFinished);
         }
     };
@@ -124,16 +143,27 @@ public final class BleClient {
     public void scan() {
         if (!bluetoothEnabled()) {
             status("Turn on Bluetooth, then scan again", false);
+            handler.post(listener::onScanFinished);
             return;
         }
         stopScan();
         discoveredCount = 0;
-        scanner = adapter.getBluetoothLeScanner();
-        if (scanner == null) {
-            status("BLE scanner unavailable", false);
+        try {
+            scanner = adapter.getBluetoothLeScanner();
+        } catch (SecurityException exception) {
+            log("BLE scanner denied: " + exception.getMessage());
+            status("Nearby Devices permission missing. Open app permissions.", false);
+            handler.post(listener::onScanFinished);
             return;
         }
-        status("Scanning for nearby BLE devices…", false);
+        if (scanner == null) {
+            log("BluetoothLeScanner was null even though Bluetooth was enabled");
+            status("BLE scanner unavailable. Toggle Bluetooth or restart the phone.", false);
+            handler.post(listener::onScanFinished);
+            return;
+        }
+        status("Scanning nearby devices (20 seconds)…", false);
+        log("Starting unfiltered BLE scan in low-latency mode");
         try {
             ScanSettings settings = new ScanSettings.Builder()
                     .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
@@ -141,10 +171,13 @@ public final class BleClient {
                     .build();
             scanning = true;
             scanner.startScan(null, settings, scanCallback);
-            handler.postDelayed(stopScanTask, 16000);
+            handler.postDelayed(stopScanTask, 20000);
         } catch (SecurityException | IllegalStateException e) {
+            scanning = false;
+            scanner = null;
             log("Scan start failed: " + e.getMessage());
-            status("Cannot start Bluetooth scan", false);
+            status("Cannot scan: " + e.getClass().getSimpleName(), false);
+            handler.post(listener::onScanFinished);
         }
     }
 
@@ -158,7 +191,7 @@ public final class BleClient {
             scanner = null;
         }
         if (wasScanning) {
-            log("Scan completed; found " + discoveredCount + " advertisements");
+            log("Scan completed: " + discoveredCount + " advertisement callbacks");
             handler.post(listener::onScanFinished);
         }
     }
