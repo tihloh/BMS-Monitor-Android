@@ -13,6 +13,9 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
+import android.bluetooth.le.ScanFilter;
+import java.util.Collections;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -28,6 +31,7 @@ public final class BleClient {
     public interface Listener {
         void onStatus(String status, boolean ready);
         void onDevice(BluetoothDevice device, String name, int rssi);
+        void onScanComplete(int count);
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onCells(double[] voltages);
         void onLog(String entry);
@@ -49,6 +53,9 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private boolean ready;
     private int pollIndex;
+    private int scanCount = 0;
+    private boolean scanning;
+    private final java.util.Set<String> foundAddresses = new java.util.HashSet<>();
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -73,20 +80,31 @@ public final class BleClient {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) name = result.getDevice().getName();
+            if (name == null || name.isEmpty()) {
+                try { name = result.getDevice().getName(); }
+                catch (SecurityException ignored) { name = null; }
+            }
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
+            if (foundAddresses.add(device.getAddress())) scanCount++;
             handler.post(() -> listener.onDevice(device, finalName, rssi));
         }
 
         @Override public void onScanFailed(int errorCode) {
             log("Scan error: " + errorCode);
-            status("Bluetooth scan failed (" + errorCode + ")", false);
+            String reason = errorCode == 1 ? "Scan already running; retry" :
+                    errorCode == 2 ? "Bluetooth hardware error; toggle Bluetooth" :
+                    errorCode == 3 ? "BLE scan could not start" :
+                    errorCode == 4 ? "BLE scan feature unsupported" :
+                    errorCode == 5 ? "Scan is rate-limited; wait 30 seconds" :
+                    "Bluetooth scan failed (" + errorCode + ")";
+            stopScan();
+            status(reason, false);
         }
     };
 
-    private final Runnable stopScanTask = this::stopScan;
+    private final Runnable stopScanTask = this::finishScan;
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -107,6 +125,8 @@ public final class BleClient {
             return;
         }
         stopScan();
+        scanCount = 0;
+        foundAddresses.clear();
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
             status("BLE scanner unavailable", false);
@@ -114,8 +134,12 @@ public final class BleClient {
         }
         status("Scanning for nearby BLE devices…", false);
         try {
-            scanner.startScan(scanCallback);
-            handler.postDelayed(stopScanTask, 12000);
+            scanning = true;
+            scanner.startScan(Collections.<ScanFilter>emptyList(),
+                    new ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                            .setReportDelay(0).build(), scanCallback);
+            handler.postDelayed(stopScanTask, 18000);
+            log("Scanning all BLE advertisements (18 seconds)");
         } catch (SecurityException | IllegalStateException e) {
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
@@ -124,11 +148,21 @@ public final class BleClient {
 
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
+        scanning = false;
         if (scanner != null) {
             try { scanner.stopScan(scanCallback); }
             catch (SecurityException | IllegalStateException ignored) { }
             scanner = null;
         }
+    }
+
+    private void finishScan() {
+        if (!scanning) return;
+        stopScan();
+        final int count = scanCount;
+        handler.post(() -> listener.onScanComplete(count));
+        if (count == 0) status("No devices found — check Nearby Devices and Location settings", false);
+        else status("Found " + count + " BLE device(s). Select ECO039E.", false);
     }
 
     public void connect(BluetoothDevice device) {
