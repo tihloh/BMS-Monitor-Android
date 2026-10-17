@@ -102,6 +102,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionCard.addView(status, below(0, 5));
         root.addView(connectionCard, below(0, 15));
 
+        Button gentaiConnect = button("Connect directly to ECO039E", true);
+        gentaiConnect.setTextSize(15);
+        gentaiConnect.setOnClickListener(v -> connectManual());
+        root.addView(gentaiConnect, below(0, 11));
         LinearLayout actions = horizontal();
         scanButton = button("Scan for devices", true);
         scanButton.setOnClickListener(v -> beginScan());
@@ -146,7 +150,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setSingleLine(true);
         manualMac.setTextSize(13);
         manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
-        manualMac.setText(getPreferences(0).getString("last_bms", ""));
+        manualMac.setText(getPreferences(0).getString("last_bms", "0B:23:EB:D7:03:9E"));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
         manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));

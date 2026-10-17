@@ -149,6 +149,13 @@ public final class BleClient {
         }
     };
     private final Runnable stopScanTask = this::stopScan;
+    private final Runnable connectionTimeout = () -> {
+        if (gatt != null && !ready) {
+            log("BLE connection timed out");
+            disconnect();
+            status("Connection timed out. Close Gentai/nRF Connect, then rescan or retry.", false);
+        }
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -250,6 +257,7 @@ public final class BleClient {
         try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) status("Bluetooth connection could not start", false);
+            else handler.postDelayed(connectionTimeout, 20000);
         } catch (SecurityException | IllegalArgumentException e) {
             log("Connect failed: " + e.getMessage());
             status("Could not connect", false);
@@ -263,7 +271,13 @@ public final class BleClient {
             return;
         }
         try {
-            connect(adapter.getRemoteDevice(address.trim()));
+            String mac = address.trim().toUpperCase(java.util.Locale.US);
+            if (Build.VERSION.SDK_INT >= 33 && "0B:23:EB:D7:03:9E".equals(mac)) {
+                log("Using Android LE random address type for ECO039E");
+                connect(adapter.getRemoteLeDevice(mac, BluetoothDevice.ADDRESS_TYPE_RANDOM));
+            } else {
+                connect(adapter.getRemoteDevice(mac));
+            }
         } catch (IllegalArgumentException | SecurityException exception) {
             log("Invalid address: " + exception.getMessage());
             status("Invalid BLE address. Use XX:XX:XX:XX:XX:XX.", false);
@@ -340,6 +354,7 @@ public final class BleClient {
             handler.post(() -> {
                 if (g != gatt) return;
                 ready = true;
+                handler.removeCallbacks(connectionTimeout);
                 status("Connected — reading live battery telemetry", true);
                 log("Notifications enabled on 0003");
                 pollIndex = 0;
@@ -433,6 +448,7 @@ public final class BleClient {
     public void disconnect() {
         stopScan();
         handler.removeCallbacks(pollTask);
+        handler.removeCallbacks(connectionTimeout);
         ready = false;
         writer = null;
         writeInProgress = false;
