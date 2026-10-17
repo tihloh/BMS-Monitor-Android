@@ -2,11 +2,11 @@
 
 ## Fixing "cannot find ECO039E"
 1. Completely force-close the original Gentai app and nRF Connect.
-2. Switch on Android Bluetooth. On Android 12+, approve Nearby devices permission for BMS Monitor.
-3. Tap **Scan / Connect**. The progress indicator remains visible during the 16-second scan.
+2. Enable Android Bluetooth **and the phone Location switch**. On Android 12+, approve both **Nearby devices** and **Precise location** for BMS Monitor. The app does not read GPS coordinates. Android BLE scanning can return zero advertisements if required Location permission or device location services are off.
+3. Tap **Scan / Connect**. The progress indicator runs during a 19-second unfiltered scan, with a fallback scan mode at 8.5 seconds if no advertisements appear.
 4. Stand within a meter of the battery. Tap **ECO039E** or **BMC1_039E** in the discovered device list.
 5. When discovery fails, the UI displays actionable troubleshooting status. Tap **Copy log** to report a problem.
-6. On Android 11 and earlier, enable Location permission and the system Location switch as required for BLE discovery.
+6. Check the on-screen **Permissions / Location settings** help and **Bluetooth diagnostics**. The settings shortcut explains how to grant precise Location and Nearby devices permission. Confirm Gentai/nRF Connect isn't maintaining an active connection.
 
 ## APK builds
 - **Build Android APK** runs automatically on pull requests and pushes to main; it generates an experimental debug APK.
@@ -31,3 +31,15 @@ Run **Actions → Publish signed APK → Run workflow**, choose a version name (
 The 0.1.0 experimental APK was signed with a different, temporary debug key. Back up anything you need from the app (currently no user-managed cloud storage), **uninstall the debug app once**, and install the first stable signed APK. Future stable releases can then update in place.
 
 Android always requires installation approval for sideloaded APK updates. BMS Monitor never bypasses this system restriction.
+
+
+## Version 0.2.2: BLE discovery repair
+- Manifest: requests COARSE/FINE Location on Android 12+ as well as Nearby devices; no GPS readings collected.
+- Before scan: check Bluetooth, permissions, and system Location switch with user-facing instructions.
+- Unfiltered low-latency scan with a simpler retry after 8.5 seconds if Android provides no advertisements.
+- Show every BLE device, its RSSI and address, and highlight likely BMS advertisements.
+- Bluetooth diagnostics now show the first detected advertisements and scan failures.
+- **Important**: Android permission approval and an actual scan on the user's handset remain necessary to validate the fix. A successful GitHub build does not prove detection works on a particular phone.
+
+## Automatic update notes
+The POS-inspired update checker is implemented: checks versioned GitHub releases, prompts the user, downloads a compatible APK, and requests user approval through PackageInstaller. Hourly best-effort update checks can post a notification. `experimental-latest` debug APKs are excluded from in-place updates because CI debug signatures are not stable. For reliable in-app auto-updates, set private signing credentials in GitHub Actions once and publish numbered releases, reusing the same key forever. No keystore or passwords should be checked into Git.
