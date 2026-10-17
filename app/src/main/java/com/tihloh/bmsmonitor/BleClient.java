@@ -13,6 +13,7 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -28,6 +29,7 @@ public final class BleClient {
     public interface Listener {
         void onStatus(String status, boolean ready);
         void onDevice(BluetoothDevice device, String name, int rssi);
+        void onScanComplete(int count);
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onCells(double[] voltages);
         void onLog(String entry);
@@ -49,6 +51,8 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private boolean ready;
     private int pollIndex;
+    private int seenCount;
+    private boolean scanning;
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -73,16 +77,22 @@ public final class BleClient {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) name = result.getDevice().getName();
+            if (name == null || name.isEmpty()) {
+                try { name = result.getDevice().getName(); }
+                catch (SecurityException ignored) { }
+            }
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
+            seenCount++;
             handler.post(() -> listener.onDevice(device, finalName, rssi));
         }
 
         @Override public void onScanFailed(int errorCode) {
-            log("Scan error: " + errorCode);
+            scanning = false;
+            log("Scan error: " + errorCode + " (1=already started, 2=registration, 3=internal, 4=unsupported, 5=out of resources)");
             status("Bluetooth scan failed (" + errorCode + ")", false);
+            handler.post(() -> listener.onScanComplete(seenCount));
         }
     };
 
@@ -113,9 +123,16 @@ public final class BleClient {
             return;
         }
         status("Scanning for nearby BLE devices…", false);
+        seenCount = 0;
+        scanning = true;
         try {
-            scanner.startScan(scanCallback);
-            handler.postDelayed(stopScanTask, 12000);
+            ScanSettings settings = new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .setReportDelay(0)
+                    .build();
+            scanner.startScan(null, settings, scanCallback);
+            log("BLE scan started in low-latency mode");
+            handler.postDelayed(stopScanTask, 20000);
         } catch (SecurityException | IllegalStateException e) {
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
@@ -124,11 +141,14 @@ public final class BleClient {
 
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
+        boolean wasScanning = scanning;
+        scanning = false;
         if (scanner != null) {
             try { scanner.stopScan(scanCallback); }
             catch (SecurityException | IllegalStateException ignored) { }
             scanner = null;
         }
+        if (wasScanning) handler.post(() -> listener.onScanComplete(seenCount));
     }
 
     public void connect(BluetoothDevice device) {
