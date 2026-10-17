@@ -63,7 +63,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         drawUi();
         onStatus("Not connected", false);
         onLog("Ready. Scanning requires Bluetooth/Nearby Devices permission.");
-        updater.check(false);
+        UpdateJobService.schedule(getApplicationContext());
+        boolean fromNotification = getIntent() != null && getIntent().getBooleanExtra("check_updates_now", false);
+        updater.check(fromNotification);
+        if (fromNotification) getIntent().removeExtra("check_updates_now");
         // Request permission on first use only when the user taps Scan.
     }
 
@@ -177,11 +180,22 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
         LinearLayout updatePanel = panel();
         updatePanel.addView(text("App updates", 15, NAVY, true));
-        firmwareHint = text("Automatically checks GitHub Releases every 12 hours while in use.", 12, MUTED, false);
+        firmwareHint = text("Checks on launch and approximately hourly in the background. Android confirms installation.", 12, MUTED, false);
         updatePanel.addView(firmwareHint, below(0, 5));
         Button check = button("Check for updates", false);
         check.setOnClickListener(v -> updater.check(true));
         updatePanel.addView(check, below(0, 9));
+        if (Build.VERSION.SDK_INT >= 33) {
+            Button alerts = button("Enable update notifications", false);
+            alerts.setOnClickListener(v -> {
+                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 93);
+                } else {
+                    Toast.makeText(this, "Update notifications already enabled", Toast.LENGTH_SHORT).show();
+                }
+            });
+            updatePanel.addView(alerts, below(0, 6));
+        }
         root.addView(updatePanel, below(0, 10));
 
         logBox = panel();
@@ -294,6 +308,15 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         if (req == BLUETOOTH_ENABLE) {
             if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
             else status.setText("Bluetooth must be enabled to detect ECO039E.");
+        }
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        if (intent != null && intent.getBooleanExtra("check_updates_now", false) && updater != null) {
+            intent.removeExtra("check_updates_now");
+            updater.check(true);
         }
     }
 
