@@ -52,9 +52,14 @@ public final class BleClient {
     private volatile boolean ready;
     private int discoveredCount;
     private volatile boolean scanning;
+    private boolean legacyScanning;
     private int pollIndex;
     private boolean writeInProgress;
     private int pendingCommand = -1;
+
+    private void forwardDevice(BluetoothDevice device, String name, int rssi, boolean likely) {
+        listener.onDevice(device, name, rssi, likely);
+    }
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -77,6 +82,7 @@ public final class BleClient {
 
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override public void onScanResult(int callbackType, ScanResult result) {
+            if (!scanning || result == null) return;
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
             if (name == null || name.isEmpty()) {
@@ -104,27 +110,45 @@ public final class BleClient {
             for (ScanResult result : results) onScanResult(0, result);
         }
         @Override public void onScanFailed(int errorCode) {
-            log("Android BLE scan failed: error " + errorCode);
-            status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
-            stopScan();
-            handler.post(listener::onScanFinished);
+            log("Android standard BLE scanner failed: " + errorCode);
+            handler.post(() -> { if (scanning) startLegacyScan(); });
         }
     };
 
-    private final Runnable stopScanTask = this::stopScan;
-    // Retry with Android's simplest scanner API on vendors returning zero results.
-    private final Runnable fallbackScanTask = () -> {
-        if (!scanning || scanner == null || discoveredCount > 0) return;
-        log("No advertisements; retrying with default BLE scanner parameters");
-        try {
-            scanner.stopScan(scanCallback);
-            scanner.startScan(scanCallback);
-        } catch (SecurityException | IllegalStateException e) {
-            log("Fallback scanner failed: " + e.getMessage());
-            status("Cannot scan. Check Nearby devices and Location.", false);
-            stopScan();
+    private final BluetoothAdapter.LeScanCallback legacyScanCallback = (device, rssi, bytes) -> {
+        if (!scanning || device == null) return;
+        String name = null;
+        if (bytes != null) {
+            // Read the advertised local name even when Android hides the device name.
+            for (int i = 0; i < bytes.length;) {
+                int len = bytes[i] & 0xFF;
+                if (len == 0 || i + len >= bytes.length) break;
+                int type = bytes[i + 1] & 0xFF;
+                if ((type == 0x08 || type == 0x09) && len > 1) {
+                    name = new String(bytes, i + 2, len - 1, java.nio.charset.StandardCharsets.UTF_8);
+                    break;
+                }
+                i += len + 1;
+            }
+        }
+        if (name == null || name.isEmpty()) {
+            try { name = device.getName(); } catch (SecurityException ignored) { }
+        }
+        final String display = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
+        boolean likely = display.toLowerCase(java.util.Locale.US)
+                .matches(".*(eco|bms|bmc|jbd|xiaoxiang|gentai).*");
+        discoveredCount++;
+        final boolean possibleBms = likely;
+        handler.post(() -> forwardDevice(device, display, rssi, possibleBms));
+    };
+
+    private final Runnable compatibilityScanTask = () -> {
+        if (scanning && discoveredCount == 0 && !legacyScanning) {
+            log("No BLE advertisements from standard scanner after 8 seconds; trying compatibility scan.");
+            startLegacyScan();
         }
     };
+    private final Runnable stopScanTask = this::stopScan;
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -140,41 +164,63 @@ public final class BleClient {
     };
 
     public void scan() {
-        if (!bluetoothEnabled()) {
-            status("Turn on Bluetooth, then scan again", false);
-            handler.post(listener::onScanFinished);
-            return;
-        }
         stopScan();
         discoveredCount = 0;
-        scanner = adapter.getBluetoothLeScanner();
-        if (scanner == null) {
-            status("BLE scanner unavailable. Toggle Bluetooth.", false);
+        if (!bluetoothEnabled()) {
+            status("Bluetooth is switched off. Enable it before scanning.", false);
             handler.post(listener::onScanFinished);
             return;
         }
-        status("Scanning for nearby BLE devices…", false);
+        scanning = true;
+        legacyScanning = false;
+        log("Starting unfiltered BLE scan (Android API " + Build.VERSION.SDK_INT + ")");
+        status("Scanning for Bluetooth LE devices…", false);
         try {
-            ScanSettings settings = new ScanSettings.Builder()
-                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                    .setReportDelay(0)
-                    .build();
-            scanning = true;
-            scanner.startScan(null, settings, scanCallback);
-            log("BLE scan started; no device filters; low-latency mode");
-            handler.postDelayed(fallbackScanTask, 8500);
-            handler.postDelayed(stopScanTask, 19000);
-        } catch (SecurityException | IllegalStateException e) {
-            scanning = false;
-            log("Scan start failed: " + e.getClass().getSimpleName() + " / " + e.getMessage());
-            status("Cannot scan. Check Nearby devices + Location permission.", false);
-            handler.post(listener::onScanFinished);
+            scanner = adapter.getBluetoothLeScanner();
+            if (scanner == null) {
+                log("Android returned no modern BLE scanner. Trying compatibility scanner.");
+                startLegacyScan();
+            } else {
+                ScanSettings settings = new ScanSettings.Builder()
+                        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                        .setReportDelay(0)
+                        .build();
+                scanner.startScan(null, settings, scanCallback);
+                handler.postDelayed(compatibilityScanTask, 8000);
+            }
+            handler.postDelayed(stopScanTask, 20000);
+        } catch (SecurityException | IllegalStateException | IllegalArgumentException e) {
+            log("BLE scan exception: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            startLegacyScan();
+            handler.postDelayed(stopScanTask, 20000);
         }
     }
 
+    @SuppressWarnings("deprecation")
+    private void startLegacyScan() {
+        if (!scanning || legacyScanning) return;
+        handler.removeCallbacks(compatibilityScanTask);
+        if (scanner != null) {
+            try { scanner.stopScan(scanCallback); }
+            catch (SecurityException | IllegalStateException ignored) { }
+            scanner = null;
+        }
+        try {
+            legacyScanning = adapter != null && adapter.startLeScan(legacyScanCallback);
+            log(legacyScanning ? "Compatibility BLE scan started" : "Compatibility BLE scan did not start");
+            if (!legacyScanning)
+                status("Scanning unavailable. Turn on Bluetooth and Location, then retry.", false);
+        } catch (SecurityException | IllegalStateException | IllegalArgumentException e) {
+            legacyScanning = false;
+            log("Compatibility scan error: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            status("Bluetooth scan blocked; review Nearby Devices and Location settings.", false);
+        }
+    }
+
+    @SuppressWarnings("deprecation")
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
-        handler.removeCallbacks(fallbackScanTask);
+        handler.removeCallbacks(compatibilityScanTask);
         boolean wasScanning = scanning;
         scanning = false;
         if (scanner != null) {
@@ -182,8 +228,13 @@ public final class BleClient {
             catch (SecurityException | IllegalStateException ignored) { }
             scanner = null;
         }
+        if (legacyScanning) {
+            try { if (adapter != null) adapter.stopLeScan(legacyScanCallback); }
+            catch (SecurityException | IllegalStateException ignored) { }
+            legacyScanning = false;
+        }
         if (wasScanning) {
-            log("Scan completed; found " + discoveredCount + " advertisements");
+            log("Scan ended; received " + discoveredCount + " BLE advertisements");
             handler.post(listener::onScanFinished);
         }
     }
