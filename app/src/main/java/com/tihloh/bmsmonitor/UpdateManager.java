@@ -43,7 +43,12 @@ public final class UpdateManager {
             try {
                 if (!force) {
                     long previous = app.getSharedPreferences("update_check",0).getLong("last",0);
-                    if (System.currentTimeMillis()-previous < INTERVAL) return;
+                    if (System.currentTimeMillis()-previous < INTERVAL) {
+                        String cached=app.getSharedPreferences("update_check",0).getString("cached","");
+                        Release release=cached.isEmpty()?null:parseRelease(new JSONObject(cached));
+                        main.post(() -> onResult.accept(release));
+                        return;
+                    }
                 }
                 HttpURLConnection conn = open(API);
                 String json;
@@ -56,23 +61,27 @@ public final class UpdateManager {
                     }
                 } finally { conn.disconnect(); }
                 JSONObject obj=new JSONObject(json);
-                String version=obj.optString("tag_name").replaceFirst("^v","");
-                JSONArray assets=obj.optJSONArray("assets");
-                String apk=null;
-                if (assets != null) for (int i=0;i<assets.length();i++) {
-                    JSONObject asset=assets.optJSONObject(i);
-                    if (asset!=null && asset.optString("name").endsWith(".apk")) {
-                        apk=asset.optString("browser_download_url"); break;
-                    }
-                }
                 app.getSharedPreferences("update_check",0).edit()
-                        .putLong("last",System.currentTimeMillis()).apply();
-                final String url=apk;
-                Release release = newer(version, BuildConfig.VERSION_NAME) ?
-                    new Release(version,obj.optString("name"),obj.optString("body"),url,obj.optString("html_url")):null;
+                        .putLong("last",System.currentTimeMillis())
+                        .putString("cached",json).apply();
+                Release release=parseRelease(obj);
                 main.post(() -> onResult.accept(release));
             } catch(Exception e) { main.post(() -> onError.accept(e.getMessage())); }
         });
+    }
+
+    private Release parseRelease(JSONObject obj) {
+        String version=obj.optString("tag_name").replaceFirst("^v","");
+        JSONArray assets=obj.optJSONArray("assets");
+        String apk=null;
+        if(assets!=null) for(int i=0;i<assets.length();i++){
+            JSONObject asset=assets.optJSONObject(i);
+            if(asset!=null && asset.optString("name").toLowerCase(java.util.Locale.US).endsWith(".apk")){
+                apk=asset.optString("browser_download_url");break;
+            }
+        }
+        if(!newer(version,BuildConfig.VERSION_NAME))return null;
+        return new Release(version,obj.optString("name"),obj.optString("body"),apk,obj.optString("html_url"));
     }
 
     private HttpURLConnection open(String address) throws Exception {
