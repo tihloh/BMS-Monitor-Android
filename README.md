@@ -1,35 +1,59 @@
 # BMS Monitor Android
 
-Experimental, **read-only** Bluetooth Low Energy monitor for Gentai/ECO-style 24V LiFePO4 battery packs.
+Native Android **experimental** Bluetooth LE monitor for Gentai/ECO-compatible 8S LiFePO4 BMS devices.
 
-## Device confirmed during initial research
-- Gentai BMS broadcast: `ECO039E` (original app names it `BMC1_039E`)
-- Primary GATT service: `00000001-0000-1000-8000-00805f9b34fb`
-- Write characteristic: `00000002-0000-1000-8000-00805f9b34fb`
-- Notify characteristic: `00000003-0000-1000-8000-00805f9b34fb`
-- Read-only telemetry requests: `AA 21 00 21 00` for battery information and `AA 22 00 22 00` for cell voltages.
-- Observed battery response was fragmented across two BLE notifications. The app assembles packets before decoding.
-- The recorded response decoded to 25.99 V, -1.15 A, 19% SOC, 19.48 Ah remaining, 100 Ah capacity. These were close to the manufacturer's app readings.
+## Version 0.2.0
 
-The packet mapping follows a community reverse-engineered interface, tested here against one Gentai device. **This application is experimental; do not rely on it for battery safety, charging, or load-cutoff decisions.** It does not expose BMS configuration controls.
+- Redesigned compact monitoring dashboard with clear connection status, SOC progress, live voltage, current, power, remaining capacity and available individual cell voltages.
+- Scan without device-name filters, show all BLE devices, stronger scan settings, 18-second discovery, permission/location instructions and clearer timeout errors.
+- Remember your selected BMS (ECO039E) to reconnect on later launches.
+- Bluetooth diagnostic log hidden under **Diagnostics**, with a copy button.
+- GitHub Releases update check on app launch (at most every 12 hours) and via **Updates**. New versions prompt to download and install using Android's PackageInstaller (requires Android confirmation).
+- Source-based release signing uses the same four GitHub Actions keystore secrets approach as the owner's POS app.
 
-## Features
-- Scan nearby BLE devices; tap `ECO039E` to connect.
-- Subscribe to GATT notifications and poll basic information every 5 seconds.
-- Voltage, current, power, SOC, remaining/rated capacity, charging/discharging status.
-- Periodic cell-voltage request and approximate min/max voltage difference where the device returns compatible data.
-- Raw hexadecimal log with one-tap copy for diagnosis.
-- Foreground-only operation; no accounts, cloud service, internet permission, or background location collection.
+## Use
 
-## Android / build
-- Android 8.0+ (API 26).
-- Requires Nearby devices permission on Android 12+; Location permission for BLE scanning on older Android versions.
-- **GitHub Actions** builds a debug APK on every push to `main` and can be started manually in Actions → Build Android APK.
-- From the successful run, download `BMS-Monitor-debug-APK` under Artifacts.
-- Main branch builds also publish the test APK on the [experimental-latest release](../../releases/tag/experimental-latest).
-- Local compilation: Android Studio with JDK 17 / Gradle 8.10.2, or `gradle :app:assembleDebug` with an Android SDK.
+1. Close the manufacturer's Gentai app to free its BLE connection.
+2. Ensure Bluetooth and Android Location are enabled.
+3. Install the APK and grant Nearby Devices and Location permissions.
+4. Tap **Scan for BMS**, and choose `ECO039E` (or the device advertising the ECO BMS).
+5. Check the live readings. If scanning or telemetry fails, open **Diagnostics → Copy Bluetooth log**.
 
-## Safety and protocol notes
-This app sends **only** two documented telemetry requests (command 0x21 and 0x22). No protection, balancing, MOSFET, or configuration writes are implemented. Telemetry compatibility has been checked only against the screenshots supplied by the device owner. Protocol variations remain possible.
+The Android 12+ permissions are intentionally explicit to improve device discovery on phone models that require location for nearby BLE scanning.
 
-Reverse-engineered packet reference: [ericbarch/ecoworthy-bms-exporter](https://github.com/ericbarch/ecoworthy-bms-exporter) (MIT licensed; see upstream for notices). This app uses its own parser implementation.
+## Known verified BLE profile
+
+- Device advertised as `ECO039E` / `BMC1_039E`.
+- Service `00000001-0000-1000-8000-00805f9b34fb`.
+- Write: `00000002-0000-1000-8000-00805f9b34fb`.
+- Notify: `00000003-0000-1000-8000-00805f9b34fb`.
+- Read-only battery request: `AA21002100`.
+- Experimental cell request: `AA22002200`.
+- A captured fragmented response was decoded at 25.99 V, -1.15 A, 19% SOC, 19.48 Ah remaining and 100 Ah capacity, close to Gentai app observations.
+
+**Do not use this experimental software for battery safety decisions or inverter/ATS cutoff controls.** No configuration commands are exposed.
+
+## Installable Android APK updates
+
+Like [tihloh/pos-source](https://github.com/tihloh/pos-source), BMS Monitor checks the latest **stable** GitHub Release, parses the version, downloads the APK, and requests Android installation permission when a newer release exists.
+
+**Persistent APK signing is mandatory for in-place upgrades.** Android refuses updates whose signing certificate differs from the installed app. The GitHub Actions debug keystore normally changes between workflow runs and cannot be used to guarantee upgrades.
+
+Configure these GitHub Actions repository secrets once (Settings → Secrets and variables → Actions) using a securely backed-up Android keystore; **never commit the keystore to the public repository**:
+
+- `BMS_KEYSTORE_BASE64` (base64-encoded JKS/PKCS12 file contents)
+- `BMS_KEYSTORE_PASSWORD`
+- `BMS_KEY_ALIAS`
+- `BMS_KEY_PASSWORD`
+
+When all four are configured, main-branch builds use the stable signing key and publish an APK as a new versioned stable release `v0.2.0`, `v0.2.1`, etc. Increase both versionName and versionCode for each future release. Releases of an existing tag are not overwritten. Stable signing and versioned releases must be configured before in-app updates can succeed.
+
+If secrets are **not** configured, GitHub builds experimental debug APKs only and publishes `experimental-latest` (prerelease). These APKs are for fresh testing installations: to install one over an older differently signed debug build, you must first uninstall the old app. Back up any settings if needed.
+
+## Build
+
+Requirements: Android Studio / SDK 35, JDK 17, Gradle 8.10.2; Android API 26+ device.
+
+Workflow: [Build Android APK](../../actions/workflows/android-apk.yml) compiles, runs protocol unit tests, publishes an APK artifact and, when appropriately signed, makes a GitHub Release.
+
+No analytics, cloud log upload or BMS writes other than read-only requests. Internet is used only to check and install published updates.
