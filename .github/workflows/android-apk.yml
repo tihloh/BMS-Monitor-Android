@@ -16,6 +16,11 @@ jobs:
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      BMS_KEYSTORE_BASE64: ${{ secrets.BMS_KEYSTORE_BASE64 }}
+      BMS_SIGNING_STORE_PASSWORD: ${{ secrets.BMS_SIGNING_STORE_PASSWORD }}
+      BMS_SIGNING_KEY_ALIAS: ${{ secrets.BMS_SIGNING_KEY_ALIAS }}
+      BMS_SIGNING_KEY_PASSWORD: ${{ secrets.BMS_SIGNING_KEY_PASSWORD }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -30,20 +35,32 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
+      - name: Restore signing identity when configured
+        run: |
+          if [ -n "$BMS_KEYSTORE_BASE64" ] && [ -n "$BMS_SIGNING_STORE_PASSWORD" ] && [ -n "$BMS_SIGNING_KEY_ALIAS" ] && [ -n "$BMS_SIGNING_KEY_PASSWORD" ]; then
+            echo "$BMS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bms-signing.jks"
+            echo "BMS_SIGNING_KEYSTORE=$RUNNER_TEMP/bms-signing.jks" >> "$GITHUB_ENV"
+            echo "Persistent APK signing configured"
+          else
+            echo "::warning::Using temporary debug signing. Seamless upgrades require the BMS signing secrets."
+          fi
       - name: Test and build APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
-      - name: Rename APK
+      - name: Prepare APK
         run: cp app/build/outputs/apk/debug/app-debug.apk BMS-Monitor-debug.apk
-      - name: Upload APK
+      - name: Upload test APK
         uses: actions/upload-artifact@v4
         with:
           name: BMS-Monitor-debug-APK
           path: BMS-Monitor-debug.apk
           if-no-files-found: error
-      - name: Publish experimental APK release
+      - name: Publish versioned GitHub release
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built debug APK for testing. Not a signed production release." --prerelease --target main
-          gh release upload experimental-latest BMS-Monitor-debug.apk --clobber
+          VERSION=$(sed -n "s/.*versionName '\([^']*\)'.*/\1/p" app/build.gradle | head -1)
+          test -n "$VERSION" || exit 1
+          TAG="v$VERSION"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target main --title "BMS Monitor $TAG" --notes "Experimental BLE monitor. Improved battery detection, compact dashboard, and GitHub-release auto-update checks. Android may require confirmation and a consistent signing key for in-place installation."
+          fi
+          gh release upload "$TAG" BMS-Monitor-debug.apk --clobber
