@@ -61,6 +61,7 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         preferredAddress=getPreferences(0).getString("last_device","");
         ble=new BleClient(this,this);
         updater=new UpdateManager(this);
+        UpdateJobService.schedule(this);
         render();
         onStatus("Not connected",false);
         updater.check(false,this::offerUpdate,e -> onLog("Update check: "+e));
