@@ -132,9 +132,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         root.addView(socPanel, below(0, 15));
 
         LinearLayout metrics1 = horizontal();
-        LinearLayout v = metric("TOTAL VOLTAGE", "-- V"); voltage = (TextView) v.getChildAt(1);
+        LinearLayout voltsCard = metric("TOTAL VOLTAGE", "-- V"); voltage = (TextView) voltsCard.getChildAt(1);
         LinearLayout a = metric("CURRENT", "-- A"); current = (TextView) a.getChildAt(1);
-        metrics1.addView(v, equalCard()); metrics1.addView(a, equalCard());
+        metrics1.addView(voltsCard, equalCard()); metrics1.addView(a, equalCard());
         root.addView(metrics1, below(0, 9));
 
         LinearLayout metrics2 = horizontal();
