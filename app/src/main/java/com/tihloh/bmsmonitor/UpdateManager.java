@@ -13,6 +13,7 @@ import android.provider.Settings;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
@@ -48,7 +49,11 @@ public final class UpdateManager {
                 String json;
                 try {
                     if (conn.getResponseCode()!=200) throw new Exception("GitHub returned HTTP "+conn.getResponseCode());
-                    json = new String(conn.getInputStream().readAllBytes(),java.nio.charset.StandardCharsets.UTF_8);
+                    try (InputStream input=conn.getInputStream(); ByteArrayOutputStream bytes=new ByteArrayOutputStream()) {
+                        byte[] buf=new byte[8192]; int n;
+                        while((n=input.read(buf))!=-1) bytes.write(buf,0,n);
+                        json=new String(bytes.toByteArray(),java.nio.charset.StandardCharsets.UTF_8);
+                    }
                 } finally { conn.disconnect(); }
                 JSONObject obj=new JSONObject(json);
                 String version=obj.optString("tag_name").replaceFirst("^v","");
