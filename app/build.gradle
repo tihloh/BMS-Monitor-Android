@@ -21,8 +21,8 @@ android {
         applicationId 'com.tihloh.bmsmonitor'
         minSdk 26
         targetSdk 34
-        versionCode project.hasProperty('VERSION_CODE') ? project.property('VERSION_CODE').toString().toInteger() : 2
-        versionName project.hasProperty('VERSION_NAME') ? project.property('VERSION_NAME').toString() : '0.2.0'
+        versionCode project.hasProperty('VERSION_CODE') ? project.property('VERSION_CODE').toString().toInteger() : 3
+        versionName project.hasProperty('VERSION_NAME') ? project.property('VERSION_NAME').toString() : '0.2.1'
     }
 
     buildTypes {
