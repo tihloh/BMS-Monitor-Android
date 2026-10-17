@@ -37,6 +37,7 @@ import java.util.Set;
 
 public final class MainActivity extends Activity implements BleClient.Listener, ReleaseUpdater.Callback {
     private static final int PERMISSIONS = 10, BLUETOOTH_ENABLE = 11;
+    private static final String KNOWN_GENTAI = "0B:23:EB:D7:03:9E";
     private static final int NAVY = Color.rgb(27, 43, 58);
     private static final int MUTED = Color.rgb(99, 116, 132);
     private static final int CYAN = Color.rgb(0, 124, 145);
@@ -54,6 +55,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
+    private boolean directAfterPermission;
     private boolean connecting;
     private int visibleCount;
 
@@ -102,8 +104,12 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionCard.addView(status, below(0, 5));
         root.addView(connectionCard, below(0, 15));
 
+        Button quick = button("Connect to ECO039E", true);
+        quick.setTextSize(15);
+        quick.setOnClickListener(v -> connectMyGentai());
+        root.addView(quick, below(0, 12));
         LinearLayout actions = horizontal();
-        scanButton = button("Scan / Connect", true);
+        scanButton = button("Scan Bluetooth devices", false);
         scanButton.setOnClickListener(v -> beginScan());
         disconnectButton = button("Disconnect", false);
         disconnectButton.setOnClickListener(v -> {
@@ -146,7 +152,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setSingleLine(true);
         manualMac.setTextSize(13);
         manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
-        manualMac.setText(getPreferences(0).getString("last_bms", ""));
+        manualMac.setText(getPreferences(0).getString("last_bms", KNOWN_GENTAI));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
         manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
@@ -280,6 +286,28 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scan();
     }
 
+    private void connectMyGentai() {
+        if (Build.VERSION.SDK_INT >= 31 &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            directAfterPermission = true;
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSIONS);
+            status.setText("Grant Nearby devices, then connect to ECO039E.");
+            return;
+        }
+        if (!ble.bluetoothEnabled()) {
+            directAfterPermission = true;
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
+            status.setText("Enable Bluetooth to connect.");
+            return;
+        }
+        directAfterPermission = false;
+        String mac = manualMac.getText().toString().trim();
+        if (!mac.matches("(?i)[0-9a-f]{2}(:[0-9a-f]{2}){5}")) mac = KNOWN_GENTAI;
+        manualMac.setText(mac);
+        status.setText("Connecting directly to Gentai " + mac + "…");
+        ble.connectByAddress(mac);
+    }
+
     private void connectManual() {
         String address = manualMac.getText().toString().trim().toUpperCase(Locale.US);
         if (!address.matches("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) {
@@ -323,6 +351,16 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
+        if (code == PERMISSIONS && directAfterPermission) {
+            if (Build.VERSION.SDK_INT < 31 ||
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
+                connectMyGentai();
+            else {
+                directAfterPermission = false;
+                status.setText("Nearby devices permission required to connect.");
+            }
+            return;
+        }
         if (code == PERMISSIONS) {
             boolean granted = results.length == permissions.length && results.length > 0;
             for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
@@ -331,7 +369,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 status.setText("Bluetooth scan permissions denied.");
                 scanHint.setText("Grant Nearby devices and precise Location in Android App permissions.");
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan Bluetooth devices");
                 progress.setVisibility(View.GONE);
             }
         }
@@ -340,7 +378,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == BLUETOOTH_ENABLE) {
-            if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
+            if (res == RESULT_OK || ble.bluetoothEnabled()) {
+                if (directAfterPermission) connectMyGentai();
+                else beginScan();
+            }
             else status.setText("Bluetooth must be enabled to detect ECO039E.");
         }
     }
@@ -389,7 +430,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 connecting = true;
                 ble.connect(device);
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan Bluetooth devices");
             });
             if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
             else deviceList.addView(choose, below(0, 6));
@@ -401,7 +442,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (scanButton == null) return;
             scanButton.setEnabled(true);
-            scanButton.setText("Scan / Connect");
+            scanButton.setText("Scan Bluetooth devices");
             progress.setVisibility(View.GONE);
             if (connecting) return;
             if (visibleCount == 0 && !ble.isReady()) {
