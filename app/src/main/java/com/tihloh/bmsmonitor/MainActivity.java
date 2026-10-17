@@ -3,6 +3,10 @@ package com.tihloh.bmsmonitor;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothManager;
+import android.location.LocationManager;
 import android.bluetooth.BluetoothDevice;
 import android.content.ClipData;
 import android.content.ClipboardManager;
@@ -29,16 +33,20 @@ import java.util.Map;
 /** Compact experimental BMS dashboard; all telemetry stays on the phone. */
 public final class MainActivity extends Activity implements BleClient.Listener {
     private static final int PERMISSION_REQUEST = 50;
+    private static final String KNOWN_ADDRESS = "0B:23:EB:D7:03:9E"; // Observed in user's nRF Connect screenshot
     private static final int INK = Color.rgb(22, 42, 57);
     private static final int MUTED = Color.rgb(99, 116, 132);
     private static final int TEAL = Color.rgb(14, 120, 141);
     private static final int BG = Color.rgb(244, 248, 251);
 
     private BleClient ble;
+    private ReleaseUpdater updater;
+    private boolean pendingDirect;
     private LinearLayout page;
     private LinearLayout deviceList;
     private LinearLayout cellsContainer;
     private TextView connection;
+    private TextView scanStatus;
     private TextView socValue;
     private TextView condition;
     private TextView voltage;
@@ -57,7 +65,9 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         getWindow().setStatusBarColor(Color.rgb(15, 37, 58));
         getWindow().setNavigationBarColor(Color.rgb(15, 37, 58));
         ble = new BleClient(this, this);
+        updater = new ReleaseUpdater(this);
         buildUi();
+        updater.check(false);
         onStatus("Not connected — tap Scan for BMS", false);
         onLog("Experimental read-only Gentai/ECO BLE monitor ready.");
     }
@@ -72,22 +82,49 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         scroll.addView(page);
         setContentView(scroll);
 
-        TextView heading = label("BMS Monitor", 26, INK, true);
-        page.addView(heading);
-        TextView sub = label("GENTAI  •  BLUETOOTH EXPERIMENT", 11, MUTED, true);
+        LinearLayout header = horizontal();
+        LinearLayout titles = new LinearLayout(this);
+        titles.setOrientation(LinearLayout.VERTICAL);
+        titles.addView(label("BMS Monitor", 26, INK, true));
+        TextView sub = label("GENTAI  •  ECO039E", 11, MUTED, true);
         sub.setLetterSpacing(0.09f);
-        page.addView(sub, withTop(0, 6));
+        titles.addView(sub);
+        header.addView(titles, new LinearLayout.LayoutParams(0, -2, 1));
+        Button updateButton = button("Updates", false);
+        updateButton.setOnClickListener(v -> updater.check(true));
+        header.addView(updateButton, new LinearLayout.LayoutParams(dp(105), dp(46)));
+        page.addView(header);
 
         LinearLayout connectionCard = card();
         connection = label("Not connected", 14, INK, true);
         connectionCard.addView(connection);
         connectionCard.addView(label("BLE telemetry only · no BMS settings are changed", 12, MUTED, false),
                 withTop(0, 6));
-        page.addView(connectionCard, withTop(0, 16));
+        page.addView(connectionCard, withTop(0, 12));
 
+        LinearLayout chargeCard = card();
+        chargeCard.addView(label("STATE OF CHARGE", 12, Color.rgb(186, 211, 222), true));
+        socValue = label("—%", 48, Color.WHITE, true);
+        chargeCard.addView(socValue);
+        condition = label("Waiting for live readings", 13, Color.rgb(186, 211, 222), false);
+        chargeCard.addView(condition);
+        chargeCard.setBackground(rounded(Color.rgb(18, 48, 69), 17));
+        page.addView(chargeCard, withTop(0, 12));
+
+
+
+        LinearLayout bleCard = card();
+        bleCard.addView(label("Bluetooth device discovery", 16, INK, true));
+        bleCard.addView(label("Use scanning or connect to the ECO039E address found in nRF Connect.", 12, MUTED, false), withTop(0, 5));
         Button scan = button("Scan for BMS", true);
-        scan.setOnClickListener(v -> requestScan());
-        page.addView(scan, withTop(0, 13));
+        scan.setOnClickListener(v -> requestScan(false));
+        bleCard.addView(scan, withTop(0, 9));
+        Button direct = button("Connect known ECO039E", false);
+        direct.setOnClickListener(v -> requestScan(true));
+        bleCard.addView(direct, withTop(0, 5));
+        scanStatus = label("Ready to scan. Close the Gentai app before connecting.", 12, MUTED, false);
+        bleCard.addView(scanStatus, withTop(0, 9));
+        page.addView(bleCard, withTop(0, 12));
 
         LinearLayout actions = horizontal();
         Button refresh = button("Refresh", false);
@@ -99,19 +136,11 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         });
         actions.addView(refresh, weightedButton());
         actions.addView(disconnect, weightedButton());
-        page.addView(actions, withTop(0, 3));
+        page.addView(actions, withTop(0, 8));
 
         deviceList = new LinearLayout(this);
         deviceList.setOrientation(LinearLayout.VERTICAL);
-        page.addView(deviceList, withTop(0, 4));
-
-        LinearLayout chargeCard = card();
-        chargeCard.addView(label("STATE OF CHARGE", 12, MUTED, true));
-        socValue = label("--%", 48, TEAL, true);
-        chargeCard.addView(socValue);
-        condition = label("Waiting for battery data", 13, MUTED, false);
-        chargeCard.addView(condition);
-        page.addView(chargeCard, withTop(0, 18));
+        page.addView(deviceList, withTop(0, 7));
 
         LinearLayout firstMetrics = horizontal();
         LinearLayout voltsBox = metric("VOLTAGE", "-- V");
@@ -165,15 +194,24 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         logView = label("No events yet", 11, MUTED, false);
         logView.setTypeface(Typeface.MONOSPACE);
         logView.setTextIsSelectable(true);
-        logView.setMaxLines(12);
+        logView.setMaxLines(15);
+        logView.setVisibility(View.GONE);
         logCard.addView(logView);
+        Button toggleLog = button("Show diagnostics", false);
+        toggleLog.setOnClickListener(v -> {
+            boolean show = logView.getVisibility() != View.VISIBLE;
+            logView.setVisibility(show ? View.VISIBLE : View.GONE);
+            toggleLog.setText(show ? "Hide diagnostics" : "Show diagnostics");
+        });
+        logCard.addView(toggleLog, withTop(0, 6));
         page.addView(logCard, withTop(0, 10));
 
-        page.addView(label("Prototype • not a battery protection instrument", 11, MUTED, false),
+        page.addView(label("v" + BuildConfig.VERSION_NAME + " • Read-only prototype • not a battery protection instrument", 11, MUTED, false),
                 withTop(0, 14));
     }
 
-    private void requestScan() {
+    private void requestScan(boolean direct) {
+        pendingDirect = direct;
         String[] permissions;
         if (Build.VERSION.SDK_INT >= 31) {
             permissions = new String[] {
@@ -188,6 +226,34 @@ public final class MainActivity extends Activity implements BleClient.Listener {
                 return;
             }
         }
+        proceed();
+    }
+
+    @SuppressLint("MissingPermission")
+    private void proceed() {
+        if (!ble.bluetoothEnabled()) {
+            onStatus("Bluetooth is turned off. Enable Bluetooth, then retry.", false);
+            return;
+        }
+        if (!pendingDirect && Build.VERSION.SDK_INT <= 30) {
+            LocationManager loc = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
+            if (loc != null && !loc.isLocationEnabled()) {
+                scanStatus.setText("Android requires Location enabled for Bluetooth scanning.");
+                return;
+            }
+        }
+        if (pendingDirect) {
+            BluetoothManager manager = (BluetoothManager) getSystemService(Context.BLUETOOTH_SERVICE);
+            if (manager == null || manager.getAdapter() == null) {
+                onStatus("Bluetooth is unavailable", false);
+                return;
+            }
+            String address = getPreferences(MODE_PRIVATE).getString("last_bms", KNOWN_ADDRESS);
+            scanStatus.setText("Direct connecting to " + address + "…");
+            try { ble.connect(manager.getAdapter().getRemoteDevice(address)); }
+            catch (IllegalArgumentException e) { onStatus("Invalid saved BLE address; try Scan", false); }
+            return;
+        }
         doScan();
     }
 
@@ -197,6 +263,7 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         deviceList.removeAllViews();
         deviceList.addView(label("Scanning… Tap the ECO039E device when it appears.", 12, MUTED, false),
                 withTop(0, 8));
+        scanStatus.setText("Searching nearby BLE devices for 20 seconds…");
         ble.scan();
     }
 
@@ -205,7 +272,7 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         if (requestCode != PERMISSION_REQUEST) return;
         boolean granted = results.length > 0;
         for (int value : results) if (value != PackageManager.PERMISSION_GRANTED) granted = false;
-        if (granted) doScan();
+        if (granted) proceed();
         else onStatus("Bluetooth permission is required to scan", false);
     }
 
@@ -223,15 +290,35 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         if (nearby.containsKey(device.getAddress())) return;
         nearby.put(device.getAddress(), device);
         if (nearby.size() == 1) deviceList.removeAllViews();
+        if (nearby.size() > 25 && !name.toUpperCase(Locale.US).contains("ECO")) return;
         Button choice = button(name + "  ·  " + rssi + " dBm", false);
         choice.setAllCaps(false);
         choice.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
         choice.setOnClickListener(v -> {
             deviceList.removeAllViews();
-            deviceList.addView(label("Selected: " + name + " (" + device.getAddress() + ")", 12, MUTED, false));
+            deviceList.addView(label("Connecting to " + name + "…", 12, MUTED, false));
+            getPreferences(MODE_PRIVATE).edit().putString("last_bms", device.getAddress()).apply();
             ble.connect(device);
         });
-        deviceList.addView(choice, withTop(0, 5));
+        if (name.toUpperCase(Locale.US).contains("ECO") ||
+                name.toUpperCase(Locale.US).contains("BMC") ||
+                name.toUpperCase(Locale.US).contains("JBD")) {
+            choice.setBackground(rounded(TEAL, 11));
+            choice.setTextColor(Color.WHITE);
+            deviceList.addView(choice, 0, withTop(0, 5));
+            scanStatus.setText("Found likely battery: " + name + " — tap to connect.");
+        } else deviceList.addView(choice, withTop(0, 5));
+    }
+
+    @Override public void onScanComplete(int count) {
+        runOnUiThread(() -> {
+            if (nearby.isEmpty()) {
+                scanStatus.setText("No BLE devices found. Check Nearby devices permission, move closer, or use Connect known ECO039E.");
+                onLog("Scan returned no BLE devices.");
+            } else if (!ble.isReady()) {
+                scanStatus.setText("Scan finished: " + nearby.size() + " unique devices. Tap ECO039E, or use direct connect.");
+            }
+        });
     }
 
     @Override public void onInfo(BatteryProtocol.BatteryInfo info) {
@@ -285,6 +372,7 @@ public final class MainActivity extends Activity implements BleClient.Listener {
 
     @Override protected void onDestroy() {
         if (ble != null) ble.close();
+        if (updater != null) updater.close();
         super.onDestroy();
     }
 
