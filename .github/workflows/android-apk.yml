@@ -28,22 +28,56 @@ jobs:
       - name: Install Android SDK
         run: |
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
-          test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
+          test -n "$SDKMANAGER" || (echo "Android sdkmanager missing" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
+      - name: Restore stable update signing (optional)
+        if: github.event_name != 'pull_request'
+        env:
+          KEY_DATA: ${{ secrets.BMS_KEYSTORE_BASE64 }}
+          KEY_PASSWORD: ${{ secrets.BMS_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.BMS_KEY_ALIAS }}
+          KEY_STORE_PASSWORD: ${{ secrets.BMS_KEY_PASSWORD }}
+        run: |
+          if [[ -n "$KEY_DATA" && -n "$KEY_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_STORE_PASSWORD" ]]; then
+            echo "$KEY_DATA" | base64 -d > "$RUNNER_TEMP/bms-stable.jks"
+            echo "BMS_SIGNING_STORE_FILE=$RUNNER_TEMP/bms-stable.jks" >> "$GITHUB_ENV"
+            echo "BMS_SIGNING_STORE_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+            echo "BMS_SIGNING_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+            echo "BMS_SIGNING_KEY_PASSWORD=$KEY_STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "BMS_STABLE_SIGNING=true" >> "$GITHUB_ENV"
+          else
+            echo "BMS_STABLE_SIGNING=false" >> "$GITHUB_ENV"
+            echo "::warning::Stable signing is not configured: APK is for fresh installs only and cannot reliably upgrade earlier debug builds."
+          fi
       - name: Test and build APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk BMS-Monitor-debug.apk
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: BMS-Monitor-debug-APK
           path: BMS-Monitor-debug.apk
           if-no-files-found: error
-      - name: Publish experimental APK release
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish experimental APK (without stable signing)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.BMS_STABLE_SIGNING != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built debug APK for testing. Not a signed production release." --prerelease --target main
+          gh release view experimental-latest >/dev/null 2>&1 ||
+            gh release create experimental-latest --title "Experimental APK (latest)" --notes "Unsigned-for-updates debug APK. Uninstall incompatible earlier debug versions before installing. Requires persistent keystore for in-app updates." --prerelease --target main
           gh release upload experimental-latest BMS-Monitor-debug.apk --clobber
+      - name: Publish versioned update (stable signing only)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && env.BMS_STABLE_SIGNING == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION=$(sed -n "s/^[[:space:]]*versionName '\\([^']*\\)'.*/\\1/p" app/build.gradle)
+          test -n "$VERSION" || exit 1
+          TAG="v$VERSION"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::warning::Release $TAG already exists. Increase Android versionCode/versionName to publish a new update."
+          else
+            cp BMS-Monitor-debug.apk "BMS-Monitor-v$VERSION.apk"
+            gh release create "$TAG" "BMS-Monitor-v$VERSION.apk" --title "BMS Monitor $TAG" --notes "Signed BMS Monitor update. Android will request installation approval." --latest --target main
+          fi

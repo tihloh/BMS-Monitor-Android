@@ -13,6 +13,7 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -49,6 +50,9 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private boolean ready;
     private int pollIndex;
+    private boolean scanning;
+    private volatile boolean writePending;
+    private Runnable connectionTimeout;
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -73,7 +77,10 @@ public final class BleClient {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) name = result.getDevice().getName();
+            if (name == null || name.isEmpty()) {
+                try { name = result.getDevice().getName(); }
+                catch (SecurityException ignored) { }
+            }
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
@@ -81,12 +88,18 @@ public final class BleClient {
         }
 
         @Override public void onScanFailed(int errorCode) {
+            scanning = false;
             log("Scan error: " + errorCode);
             status("Bluetooth scan failed (" + errorCode + ")", false);
         }
     };
 
-    private final Runnable stopScanTask = this::stopScan;
+    private final Runnable stopScanTask = () -> {
+        if (scanning) {
+            stopScan();
+            status("Scan complete. Move closer and retry if the BMS was not found.", false);
+        }
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -114,15 +127,21 @@ public final class BleClient {
         }
         status("Scanning for nearby BLE devices…", false);
         try {
-            scanner.startScan(scanCallback);
-            handler.postDelayed(stopScanTask, 12000);
+            scanning = true;
+            ScanSettings settings = new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build();
+            scanner.startScan(null, settings, scanCallback);
+            log("Started low-latency BLE scan with no name filters");
+            handler.postDelayed(stopScanTask, 18000);
         } catch (SecurityException | IllegalStateException e) {
+            scanning = false;
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
         }
     }
 
     public void stopScan() {
+        scanning = false;
         handler.removeCallbacks(stopScanTask);
         if (scanner != null) {
             try { scanner.stopScan(scanCallback); }
@@ -140,6 +159,17 @@ public final class BleClient {
         try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) status("Bluetooth connection could not start", false);
+            else {
+                BluetoothGatt pending = gatt;
+                connectionTimeout = () -> {
+                    if (gatt == pending && !ready) {
+                        log("Connection timed out");
+                        disconnect();
+                        status("Connection timed out. Close Gentai and try again.", false);
+                    }
+                };
+                handler.postDelayed(connectionTimeout, 16000);
+            }
         } catch (SecurityException | IllegalArgumentException e) {
             log("Connect failed: " + e.getMessage());
             status("Could not connect", false);
@@ -160,6 +190,7 @@ public final class BleClient {
                         ready = false;
                         writer = null;
                         handler.removeCallbacks(pollTask);
+                        if (connectionTimeout != null) handler.removeCallbacks(connectionTimeout);
                         g.close();
                         gatt = null;
                         status("Disconnected — tap Scan to reconnect", false);
@@ -214,6 +245,7 @@ public final class BleClient {
             handler.post(() -> {
                 if (g != gatt) return;
                 ready = true;
+                if (connectionTimeout != null) handler.removeCallbacks(connectionTimeout);
                 status("Connected — reading live battery telemetry", true);
                 log("Notifications enabled on 0003");
                 pollIndex = 0;
@@ -235,8 +267,11 @@ public final class BleClient {
 
         @Override public void onCharacteristicWrite(BluetoothGatt g,
                 BluetoothGattCharacteristic characteristic, int status) {
-            if (g == gatt && status != BluetoothGatt.GATT_SUCCESS)
-                log("Telemetry request write failed: " + status);
+            if (g == gatt) {
+                writePending = false;
+                if (status != BluetoothGatt.GATT_SUCCESS)
+                    log("Telemetry request write failed: " + status);
+            }
         }
     };
 
@@ -269,7 +304,7 @@ public final class BleClient {
     }
 
     private void request(int code) {
-        if (!ready || writer == null || gatt == null) return;
+        if (!ready || writer == null || gatt == null || writePending) return;
         byte[] payload = BatteryProtocol.request(code);
         try {
             int result;
@@ -280,7 +315,10 @@ public final class BleClient {
                 writer.setValue(payload);
                 result = gatt.writeCharacteristic(writer) ? BluetoothGatt.GATT_SUCCESS : -1;
             }
-            if (result == BluetoothGatt.GATT_SUCCESS) log("TX " + BatteryProtocol.hex(payload));
+            if (result == BluetoothGatt.GATT_SUCCESS) {
+                writePending = true;
+                log("TX " + BatteryProtocol.hex(payload));
+            }
             else log("Could not queue request 0x" + Integer.toHexString(code) + " (" + result + ")");
         } catch (SecurityException | IllegalStateException e) {
             log("Request failed: " + e.getMessage());
@@ -291,7 +329,9 @@ public final class BleClient {
         stopScan();
         handler.removeCallbacks(pollTask);
         ready = false;
+        writePending = false;
         writer = null;
+        if (connectionTimeout != null) handler.removeCallbacks(connectionTimeout);
         assembler.reset();
         if (gatt != null) {
             BluetoothGatt old = gatt;
