@@ -43,3 +43,13 @@ Android always requires installation approval for sideloaded APK updates. BMS Mo
 
 ## Automatic update notes
 The POS-inspired update checker is implemented: checks versioned GitHub releases, prompts the user, downloads a compatible APK, and requests user approval through PackageInstaller. Hourly best-effort update checks can post a notification. `experimental-latest` debug APKs are excluded from in-place updates because CI debug signatures are not stable. For reliable in-app auto-updates, set private signing credentials in GitHub Actions once and publish numbered releases, reusing the same key forever. No keystore or passwords should be checked into Git.
+
+## v0.3.0 Android BLE scanner compatibility
+
+- Unfiltered low-latency BLE scanner first, then alternate legacy LE scanning automatically after 8 seconds without results.
+- Scans run for up to 20 seconds, with detailed status and a copyable diagnostic log.
+- Android 12+ requires Nearby Devices permission. Some phones also require Location access and the Location switch ON. The app does not store geographic coordinates.
+- If scanning discovers no devices but nRF Connect sees ECO039E, enter the BMS Bluetooth address from nRF Connect into the Direct BLE field and tap **Direct**.
+- Telemetry remains read-only. This repair has passed CI but must be validated with a real Gentai battery.
+
+**Experimental debug APK signing:** GitHub Actions debug builds from separate runners can have different certificates. If an old debug APK won't install over the top, uninstall it before installing v0.3.0. True automatic in-place updates require one consistent release signing key and published numeric GitHub releases.

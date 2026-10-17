@@ -54,6 +54,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
+    private boolean connecting;
     private int visibleCount;
 
     @Override public void onCreate(Bundle saved) {
@@ -152,10 +153,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout.LayoutParams edit = new LinearLayout.LayoutParams(0, dp(44), 1);
         edit.rightMargin = dp(7);
         directRow.addView(manualMac, edit);
-        Button manualConnect = button("Connect", false);
+        Button manualConnect = button("Direct", true);
         manualConnect.setOnClickListener(v -> connectManual());
         directRow.addView(manualConnect, new LinearLayout.LayoutParams(dp(98), dp(44)));
-        scanCard.addView(text("If the scan doesn't find ECO039E, enter its BLE address from nRF Connect:", 12, MUTED, false), below(0, 10));
+        scanCard.addView(text("DIRECT BLE CONNECTION · Bypass scanning with the BMS address shown by nRF Connect:", 12, MUTED, true), below(0, 10));
         scanCard.addView(directRow, below(0, 5));
         root.addView(scanCard, below(0, 10));
 
@@ -296,10 +297,14 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             return;
         }
         getPreferences(0).edit().putString("last_bms", address).apply();
+        connecting = true;
+        scanHint.setText("Connecting directly without scanning…");
+        onLog("Connecting directly to saved BLE address");
         ble.connectByAddress(address);
     }
 
     private void scan() {
+        connecting = false;
         visibleCount = 0;
         discovered.clear();
         deviceList.removeAllViews();
@@ -307,7 +312,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scanButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE);
         totalFound.setText("Looking for Gentai BMS…");
-        scanHint.setText("Scanning for 19 seconds. All nearby BLE devices appear here. Move close to the battery.");
+        scanHint.setText("Scanning all Bluetooth LE devices for up to 20 seconds; if no results after 8 seconds, a compatibility scan will run.");
         status.setText("Looking for nearby Bluetooth devices…");
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
                 + ": Nearby devices / Location permissions granted, Bluetooth and Location ON");
@@ -325,6 +330,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             else {
                 status.setText("Bluetooth scan permissions denied.");
                 scanHint.setText("Grant Nearby devices and precise Location in Android App permissions.");
+                scanButton.setEnabled(true);
+                scanButton.setText("Scan / Connect");
+                progress.setVisibility(View.GONE);
             }
         }
     }
@@ -378,6 +386,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
                 getPreferences(0).edit().putString("last_bms", device.getAddress()).apply();
                 if (manualMac != null) manualMac.setText(device.getAddress());
+                connecting = true;
                 ble.connect(device);
                 scanButton.setEnabled(true);
                 scanButton.setText("Scan / Connect");
@@ -394,8 +403,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             scanButton.setEnabled(true);
             scanButton.setText("Scan / Connect");
             progress.setVisibility(View.GONE);
+            if (connecting) return;
             if (visibleCount == 0 && !ble.isReady()) {
-                scanHint.setText("Android returned no advertisements. Check precise Location permission and Location switch, then retry. Test with nRF Connect if needed.");
+                scanHint.setText("No BLE devices reported after both scan methods. Verify Nearby devices and precise Location permissions, turn ON Location, or enter the BMS address and tap Direct.");
                 status.setText("No Bluetooth LE advertisements received.");
             } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
                 scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
