@@ -1,12 +1,12 @@
 # Installing and updating BMS Monitor
 
 ## Fixing "cannot find ECO039E"
-1. Completely force-close the original Gentai app and nRF Connect.
-2. Switch on Android Bluetooth. On Android 12+, approve Nearby devices permission for BMS Monitor.
-3. Tap **Scan / Connect**. The progress indicator remains visible during the 16-second scan.
+1. Disconnect and force-close the original Gentai app and nRF Connect.
+2. Switch on Android Bluetooth and the system Location switch. Approve Nearby Devices and **Precise Location** permissions; on some phones BLE discovery returns zero devices unless both are enabled. The monitor does not read GPS coordinates.
+3. Tap **Scan for devices**. The scan runs for about 20 seconds and includes unnamed BLE devices.
 4. Stand within a meter of the battery. Tap **ECO039E** or **BMC1_039E** in the discovered device list.
 5. When discovery fails, the UI displays actionable troubleshooting status. Tap **Copy log** to report a problem.
-6. On Android 11 and earlier, enable Location permission and the system Location switch as required for BLE discovery.
+6. If discovery still returns nothing, use nRF Connect to find the address shown for ECO039E. Enter that address in the monitor's direct connect field and tap Connect. Some BLE modules use rotating addresses, so this fallback may not always work. Tap **App permissions** for Android settings.\n7. Copy the Bluetooth diagnostics log if both scanning and direct connection fail.
 
 ## APK builds
 - **Build Android APK** runs automatically on pull requests and pushes to main; it generates an experimental debug APK.
