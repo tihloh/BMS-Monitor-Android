@@ -13,6 +13,12 @@ Experimental, **read-only** Bluetooth Low Energy monitor for Gentai/ECO-style 24
 
 The packet mapping follows a community reverse-engineered interface, tested here against one Gentai device. **This application is experimental; do not rely on it for battery safety, charging, or load-cutoff decisions.** It does not expose BMS configuration controls.
 
+## Bluetooth discovery and updates
+- Scan all nearby BLE devices with high-performance scanning; tap ECO039E to connect.
+- If scanning fails, enter the BLE MAC address from nRF Connect, or reconnect with a locally saved address.
+- Check GitHub Releases at launch (12-hour throttle) and on demand; Android will request approval to install.
+- **Same signing certificate required** for in-place updates. See [signing](docs/SIGNING.md).
+
 ## Features
 - Scan nearby BLE devices; tap `ECO039E` to connect.
 - Subscribe to GATT notifications and poll basic information every 5 seconds.

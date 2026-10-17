@@ -30,6 +30,23 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
+      - name: Configure persistent APK signing (optional for experimental builds)
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            test -n "$STORE_PASSWORD" && test -n "$ALIAS" && test -n "$KEY_PASSWORD" || (echo "Signing secrets are incomplete" && exit 1)
+            printf "%s" "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bms-signing.jks"
+            echo "ANDROID_SIGNING_STORE_FILE=$RUNNER_TEMP/bms-signing.jks" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$STORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_ALIAS=$ALIAS" >> "$GITHUB_ENV"
+            echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Using temporary debug signing. In-place APK updates require a persistent signing key."
+          fi
       - name: Test and build APK
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Rename APK
@@ -45,5 +62,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built debug APK for testing. Not a signed production release." --prerelease --target main
+          VERSION=$(sed -n "s/.*versionName '\\([^']*\\)'.*/\\1/p" app/build.gradle | head -1)
+          test -n "$VERSION" || (echo "Missing versionName" && exit 1)
+          TAG="v$VERSION"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --title "BMS Monitor $TAG (experimental)" --notes "Read-only Gentai BLE prototype. Android requires APKs to be signed by the same key for in-place updates." --prerelease --target main
+          gh release upload "$TAG" BMS-Monitor-debug.apk --clobber
+          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built testing APK. Without configured signing secrets, reinstall between builds." --prerelease --target main
           gh release upload experimental-latest BMS-Monitor-debug.apk --clobber
