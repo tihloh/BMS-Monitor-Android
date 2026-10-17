@@ -260,9 +260,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION)
                 != PackageManager.PERMISSION_GRANTED) {
             missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
-            if (Build.VERSION.SDK_INT >= 31 &&
-                    checkSelfPermission(Manifest.permission.ACCESS_COARSE_LOCATION)
-                            != PackageManager.PERMISSION_GRANTED) {
+            if (Build.VERSION.SDK_INT >= 31) {
+                // Android 12+ requires requesting coarse alongside fine location.
                 missing.add(Manifest.permission.ACCESS_COARSE_LOCATION);
             }
         }
