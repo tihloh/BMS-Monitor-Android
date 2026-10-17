@@ -212,7 +212,17 @@ public final class BleClient {
             return;
         }
         try {
-            connect(adapter.getRemoteDevice(address.trim()));
+            String mac = address.trim().toUpperCase(java.util.Locale.US);
+            // Gentai ECO039E advertises a random-type BLE address in the supplied scan.
+            // Android 13+ can construct a LE device with the correct address type.
+            BluetoothDevice target;
+            if (Build.VERSION.SDK_INT >= 33 && "0B:23:EB:D7:03:9E".equals(mac)) {
+                target = adapter.getRemoteLeDevice(mac, BluetoothDevice.ADDRESS_TYPE_RANDOM);
+                log("Using LE random address type for ECO039E");
+            } else {
+                target = adapter.getRemoteDevice(mac);
+            }
+            connect(target);
         } catch (IllegalArgumentException | SecurityException exception) {
             log("Invalid address: " + exception.getMessage());
             status("Invalid BLE address. Use XX:XX:XX:XX:XX:XX.", false);
