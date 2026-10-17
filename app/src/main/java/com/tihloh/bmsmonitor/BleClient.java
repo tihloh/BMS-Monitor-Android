@@ -12,6 +12,7 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
+import android.bluetooth.le.ScanSettings;
 import android.bluetooth.le.ScanResult;
 import android.content.Context;
 import android.os.Build;
@@ -19,6 +20,7 @@ import android.os.Handler;
 import android.os.Looper;
 
 import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -49,6 +51,9 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private boolean ready;
     private int pollIndex;
+    private int scanCount;
+    private int pendingCode = -1;
+    private boolean writeInProgress;
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -75,18 +80,30 @@ public final class BleClient {
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
             if (name == null || name.isEmpty()) name = result.getDevice().getName();
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
+            scanCount++;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
             handler.post(() -> listener.onDevice(device, finalName, rssi));
         }
 
+        @Override public void onBatchScanResults(List<ScanResult> results) {
+            for (ScanResult result : results) onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, result);
+        }
+
         @Override public void onScanFailed(int errorCode) {
             log("Scan error: " + errorCode);
-            status("Bluetooth scan failed (" + errorCode + ")", false);
+            status("Scan error " + errorCode + " — turn Bluetooth off/on and retry", false);
         }
     };
 
-    private final Runnable stopScanTask = this::stopScan;
+    private final Runnable stopScanTask = () -> {
+        if (scanner != null) {
+            int found = scanCount;
+            stopScan();
+            status(found == 0 ? "No devices found — check Bluetooth / Location, then retry"
+                    : "Scan finished · " + found + " signal(s) found", false);
+        }
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -107,6 +124,7 @@ public final class BleClient {
             return;
         }
         stopScan();
+        scanCount = 0;
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
             status("BLE scanner unavailable", false);
@@ -114,8 +132,12 @@ public final class BleClient {
         }
         status("Scanning for nearby BLE devices…", false);
         try {
-            scanner.startScan(scanCallback);
-            handler.postDelayed(stopScanTask, 12000);
+            ScanSettings settings = new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .setReportDelay(0L)
+                    .build();
+            scanner.startScan(new ArrayList<>(), settings, scanCallback);
+            handler.postDelayed(stopScanTask, 18000);
         } catch (SecurityException | IllegalStateException e) {
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
@@ -135,6 +157,8 @@ public final class BleClient {
         stopScan();
         disconnect();
         assembler.reset();
+        pendingCode = -1;
+        writeInProgress = false;
         status("Connecting to " + device.getAddress() + "…", false);
         log("Connecting to " + device.getAddress());
         try {
@@ -145,6 +169,21 @@ public final class BleClient {
             status("Could not connect", false);
         }
     }
+
+    public void connectByAddress(String address) {
+        if (!bluetoothEnabled()) {
+            status("Turn on Bluetooth before connecting", false);
+            return;
+        }
+        try {
+            connect(adapter.getRemoteDevice(address.trim()));
+        } catch (IllegalArgumentException | SecurityException error) {
+            log("Cannot connect using address: " + error.getMessage());
+            status("Invalid Bluetooth address", false);
+        }
+    }
+
+    public boolean isScanning() { return scanner != null; }
 
     private final BluetoothGattCallback callback = new BluetoothGattCallback() {
         @Override public void onConnectionStateChange(BluetoothGatt g, int result, int newState) {
@@ -159,6 +198,8 @@ public final class BleClient {
                     if (g == gatt) {
                         ready = false;
                         writer = null;
+                        pendingCode = -1;
+                        writeInProgress = false;
                         handler.removeCallbacks(pollTask);
                         g.close();
                         gatt = null;
@@ -235,8 +276,17 @@ public final class BleClient {
 
         @Override public void onCharacteristicWrite(BluetoothGatt g,
                 BluetoothGattCharacteristic characteristic, int status) {
-            if (g == gatt && status != BluetoothGatt.GATT_SUCCESS)
-                log("Telemetry request write failed: " + status);
+            if (g != gatt) return;
+            handler.post(() -> {
+                writeInProgress = false;
+                if (status != BluetoothGatt.GATT_SUCCESS)
+                    log("Telemetry request write failed: " + status);
+                if (pendingCode >= 0) {
+                    int next = pendingCode;
+                    pendingCode = -1;
+                    handler.postDelayed(() -> request(next), 200);
+                }
+            });
         }
     };
 
@@ -270,6 +320,10 @@ public final class BleClient {
 
     private void request(int code) {
         if (!ready || writer == null || gatt == null) return;
+        if (writeInProgress) {
+            pendingCode = code;
+            return;
+        }
         byte[] payload = BatteryProtocol.request(code);
         try {
             int result;
@@ -280,7 +334,10 @@ public final class BleClient {
                 writer.setValue(payload);
                 result = gatt.writeCharacteristic(writer) ? BluetoothGatt.GATT_SUCCESS : -1;
             }
-            if (result == BluetoothGatt.GATT_SUCCESS) log("TX " + BatteryProtocol.hex(payload));
+            if (result == BluetoothGatt.GATT_SUCCESS) {
+                writeInProgress = true;
+                log("TX " + BatteryProtocol.hex(payload));
+            }
             else log("Could not queue request 0x" + Integer.toHexString(code) + " (" + result + ")");
         } catch (SecurityException | IllegalStateException e) {
             log("Request failed: " + e.getMessage());
@@ -292,6 +349,8 @@ public final class BleClient {
         handler.removeCallbacks(pollTask);
         ready = false;
         writer = null;
+        pendingCode = -1;
+        writeInProgress = false;
         assembler.reset();
         if (gatt != null) {
             BluetoothGatt old = gatt;
