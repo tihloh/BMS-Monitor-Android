@@ -11,6 +11,7 @@
     <!-- BLE scanning requires Nearby devices plus fine Location on many Android builds.
          Location coordinates are never collected or uploaded. Do not use neverForLocation:
          Android may filter BLE adverts from batteries/beacons. -->
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
