@@ -334,13 +334,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         boolean locationOn = lm == null || lm.isProviderEnabled(LocationManager.GPS_PROVIDER)
                 || lm.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
         String message = "Bluetooth: " + (bluetoothOn ? "ON" : "OFF")
-                + "\\nNearby Devices scan: " + (scanAllowed ? "ALLOWED" : "NOT ALLOWED")
-                + "\\nBluetooth connect: " + (connectAllowed ? "ALLOWED" : "NOT ALLOWED")
-                + "\\nFine Location: " + (fine ? "ALLOWED" : "NOT ALLOWED")
-                + "\\nLocation switch: " + (locationOn ? "ON" : "OFF")
-                + "\\nBLE scan active: " + ble.isScanning()
-                + "\\nResults displayed: " + visibleCount
-                + "\\n\\nUse the Grant permissions button, then turn on Bluetooth and Location and retry. The app only uses Location for BLE discovery and does not record coordinates.";
+                + "\nNearby Devices scan: " + (scanAllowed ? "ALLOWED" : "NOT ALLOWED")
+                + "\nBluetooth connect: " + (connectAllowed ? "ALLOWED" : "NOT ALLOWED")
+                + "\nFine Location: " + (fine ? "ALLOWED" : "NOT ALLOWED")
+                + "\nLocation switch: " + (locationOn ? "ON" : "OFF")
+                + "\nBLE scan active: " + ble.isScanning()
+                + "\nResults displayed: " + visibleCount
+                + "\n\nUse the Grant permissions button, then turn on Bluetooth and Location and retry. The app only uses Location for BLE discovery and does not record coordinates.";
         new AlertDialog.Builder(this)
                 .setTitle("BLE scan diagnostics")
                 .setMessage(message)
