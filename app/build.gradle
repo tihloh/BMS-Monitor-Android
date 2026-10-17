@@ -4,6 +4,7 @@ plugins {
 android {
     namespace 'com.tihloh.bmsmonitor'
     compileSdk 35
+    buildFeatures { buildConfig true }
 
     defaultConfig {
         applicationId 'com.tihloh.bmsmonitor'
