@@ -53,6 +53,8 @@ public final class BleClient {
     private int discoveredCount;
     private volatile boolean scanning;
     private int pollIndex;
+    private boolean writeInProgress;
+    private int pendingCommand = -1;
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -165,6 +167,8 @@ public final class BleClient {
         stopScan();
         disconnect();
         assembler.reset();
+        writeInProgress = false;
+        pendingCommand = -1;
         status("Connecting to " + device.getAddress() + "…", false);
         log("Connecting to " + device.getAddress());
         try {
@@ -173,6 +177,20 @@ public final class BleClient {
         } catch (SecurityException | IllegalArgumentException e) {
             log("Connect failed: " + e.getMessage());
             status("Could not connect", false);
+        }
+    }
+
+    /** Connect directly to a known BLE address when Android advertisement scanning fails. */
+    public void connectByAddress(String address) {
+        if (!bluetoothEnabled()) {
+            status("Turn on Bluetooth, then retry the saved address", false);
+            return;
+        }
+        try {
+            connect(adapter.getRemoteDevice(address.trim()));
+        } catch (IllegalArgumentException | SecurityException exception) {
+            log("Invalid address: " + exception.getMessage());
+            status("Invalid BLE address. Use XX:XX:XX:XX:XX:XX.", false);
         }
     }
 
@@ -189,6 +207,8 @@ public final class BleClient {
                     if (g == gatt) {
                         ready = false;
                         writer = null;
+                        writeInProgress = false;
+                        pendingCommand = -1;
                         handler.removeCallbacks(pollTask);
                         g.close();
                         gatt = null;
@@ -265,8 +285,17 @@ public final class BleClient {
 
         @Override public void onCharacteristicWrite(BluetoothGatt g,
                 BluetoothGattCharacteristic characteristic, int status) {
-            if (g == gatt && status != BluetoothGatt.GATT_SUCCESS)
-                log("Telemetry request write failed: " + status);
+            if (g != gatt) return;
+            handler.post(() -> {
+                writeInProgress = false;
+                if (status != BluetoothGatt.GATT_SUCCESS)
+                    log("Telemetry request write failed: " + status);
+                if (pendingCommand >= 0) {
+                    int next = pendingCommand;
+                    pendingCommand = -1;
+                    handler.postDelayed(() -> request(next), 180);
+                }
+            });
         }
     };
 
@@ -301,6 +330,10 @@ public final class BleClient {
 
     private void request(int code) {
         if (!ready || writer == null || gatt == null) return;
+        if (writeInProgress) {
+            pendingCommand = code;
+            return;
+        }
         byte[] payload = BatteryProtocol.request(code);
         try {
             int result;
@@ -311,7 +344,10 @@ public final class BleClient {
                 writer.setValue(payload);
                 result = gatt.writeCharacteristic(writer) ? BluetoothGatt.GATT_SUCCESS : -1;
             }
-            if (result == BluetoothGatt.GATT_SUCCESS) log("TX " + BatteryProtocol.hex(payload));
+            if (result == BluetoothGatt.GATT_SUCCESS) {
+                writeInProgress = true;
+                log("TX " + BatteryProtocol.hex(payload));
+            }
             else log("Could not queue request 0x" + Integer.toHexString(code) + " (" + result + ")");
         } catch (SecurityException | IllegalStateException e) {
             log("Request failed: " + e.getMessage());
@@ -323,6 +359,8 @@ public final class BleClient {
         handler.removeCallbacks(pollTask);
         ready = false;
         writer = null;
+        writeInProgress = false;
+        pendingCommand = -1;
         assembler.reset();
         if (gatt != null) {
             BluetoothGatt old = gatt;

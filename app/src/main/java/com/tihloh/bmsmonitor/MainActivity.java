@@ -21,6 +21,7 @@ import android.os.Bundle;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
@@ -47,6 +48,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private TextView connection, scanHint, firmwareHint, soc, status, voltage, current, power,
             remaining, capacity, updated, cellHeading, logText, totalFound;
     private Button scanButton, disconnectButton;
+    private EditText manualMac;
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
@@ -121,6 +123,23 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scanCard.addView(scanHint, below(0, 7));
         deviceList = vertical();
         scanCard.addView(deviceList, below(0, 4));
+        LinearLayout directRow = horizontal();
+        manualMac = new EditText(this);
+        manualMac.setSingleLine(true);
+        manualMac.setTextSize(13);
+        manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
+        manualMac.setText(getPreferences(0).getString("last_bms", ""));
+        manualMac.setSelectAllOnFocus(true);
+        manualMac.setPadding(dp(9), 0, dp(9), 0);
+        manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
+        LinearLayout.LayoutParams edit = new LinearLayout.LayoutParams(0, dp(44), 1);
+        edit.rightMargin = dp(7);
+        directRow.addView(manualMac, edit);
+        Button manualConnect = button("Connect", false);
+        manualConnect.setOnClickListener(v -> connectManual());
+        directRow.addView(manualConnect, new LinearLayout.LayoutParams(dp(98), dp(44)));
+        scanCard.addView(text("If the scan doesn't find ECO039E, enter its BLE address from nRF Connect:", 12, MUTED, false), below(0, 10));
+        scanCard.addView(directRow, below(0, 5));
         root.addView(scanCard, below(0, 10));
 
         LinearLayout socPanel = panel();
@@ -224,6 +243,26 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scan();
     }
 
+    private void connectManual() {
+        String address = manualMac.getText().toString().trim().toUpperCase(Locale.US);
+        if (!address.matches("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) {
+            manualMac.setError("Enter BLE address as XX:XX:XX:XX:XX:XX");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 31 &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[] { Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT }, PERMISSIONS);
+            return;
+        }
+        if (!ble.bluetoothEnabled()) {
+            status.setText("Turn Bluetooth on and try connecting again.");
+            return;
+        }
+        getPreferences(0).edit().putString("last_bms", address).apply();
+        ble.connectByAddress(address);
+    }
+
     private void scan() {
         visibleCount = 0;
         discovered.clear();
@@ -287,6 +326,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 ble.stopScan();
                 deviceList.removeAllViews();
                 deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
+                getPreferences(0).edit().putString("last_bms", device.getAddress()).apply();
+                if (manualMac != null) manualMac.setText(device.getAddress());
                 ble.connect(device);
                 scanButton.setEnabled(true);
                 scanButton.setText("Scan / Connect");
