@@ -95,18 +95,45 @@ public final class BleClient {
             }
             final boolean likelyBms = likely;
             discoveredCount++;
+            if (discoveredCount == 1) log("First BLE advertisement received: " + finalName
+                    + " at " + rssi + " dBm");
             handler.post(() -> listener.onDevice(device, finalName, rssi, likelyBms));
+        }
+
+        @Override public void onBatchScanResults(List<ScanResult> results) {
+            for (ScanResult result : results) onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, result);
         }
 
         @Override public void onScanFailed(int errorCode) {
             scanning = false;
-            log("Android BLE scan failed: code " + errorCode);
+            handler.removeCallbacks(retryScanTask);
+            handler.removeCallbacks(stopScanTask);
+            scanner = null;
+            String reason = errorCode == ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED
+                    ? "registration failed" : errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                    ? "already started" : errorCode == ScanCallback.SCAN_FAILED_INTERNAL_ERROR
+                    ? "internal Bluetooth error" : errorCode == ScanCallback.SCAN_FAILED_FEATURE_UNSUPPORTED
+                    ? "scan mode unsupported" : "error";
+            log("Android BLE scan failed: code " + errorCode + " (" + reason + ")");
             status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
             handler.post(listener::onScanFinished);
         }
     };
 
     private final Runnable stopScanTask = this::stopScan;
+    private final Runnable retryScanTask = () -> {
+        if (!scanning || discoveredCount != 0 || scanner == null) return;
+        log("No BLE advertisements after 9 seconds. Retrying with Android's default scan mode.");
+        try {
+            scanner.stopScan(scanCallback);
+            scanner.startScan(scanCallback);
+            handler.removeCallbacks(stopScanTask);
+            handler.postDelayed(stopScanTask, 14000);
+        } catch (SecurityException | IllegalStateException e) {
+            log("Scan fallback failed: " + e.getMessage());
+            stopScan();
+        }
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -141,7 +168,9 @@ public final class BleClient {
                     .build();
             scanning = true;
             scanner.startScan(null, settings, scanCallback);
-            handler.postDelayed(stopScanTask, 16000);
+            log("Android BLE scan active: no filters, low-latency scan; waiting for advertisements.");
+            handler.postDelayed(retryScanTask, 9000);
+            handler.postDelayed(stopScanTask, 24000);
         } catch (SecurityException | IllegalStateException e) {
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
@@ -150,6 +179,7 @@ public final class BleClient {
 
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
+        handler.removeCallbacks(retryScanTask);
         boolean wasScanning = scanning;
         scanning = false;
         if (scanner != null) {
@@ -158,7 +188,7 @@ public final class BleClient {
             scanner = null;
         }
         if (wasScanning) {
-            log("Scan completed; found " + discoveredCount + " advertisements");
+            log("Scan completed; received " + discoveredCount + " BLE advertisements");
             handler.post(listener::onScanFinished);
         }
     }
