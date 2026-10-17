@@ -2,7 +2,14 @@
 
 Experimental **read-only** Gentai/ECO-style Bluetooth battery monitor for Android 8.0 and later.
 
-## Version 0.2.0
+## Version 0.2.2
+- Fix BLE discovery on Android 12–16 by requesting Nearby devices **and precise Location** (without the `neverForLocation` filter).
+- Detect disabled phone Location and guide users to Android settings; GPS coordinates are never collected.
+- Add a one-tap **Connect directly to ECO039E** button prefilled with the device address from the original nRF Connect screenshot.
+- Auto-connect when a nearby device advertises as `ECO039E`, while keeping manual device selection.
+- Scan failure diagnostics remain visible instead of incorrectly reporting zero nearby devices.
+
+## Previous Version 0.2.0
 - BLE scanner with explicit nearby-device permissions, scan progress, signal strength, and diagnostic messages.
 - Connects to observed Gentai `ECO039E` / `BMC1_039E` device using service `0x0001`, write `0x0002`, notify `0x0003`.
 - Decodes fragmented BLE telemetry packets: voltage, current, power, SOC, remaining/rated capacity and compatible cell voltages.

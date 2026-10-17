@@ -98,10 +98,17 @@ public final class BleClient {
             handler.post(() -> listener.onDevice(device, finalName, rssi, likelyBms));
         }
 
+        @Override public void onBatchScanResults(List<ScanResult> results) {
+            if (results == null) return;
+            for (ScanResult result : results) onScanResult(ScanSettings.CALLBACK_TYPE_ALL_MATCHES, result);
+        }
+
         @Override public void onScanFailed(int errorCode) {
             scanning = false;
-            log("Android BLE scan failed: code " + errorCode);
-            status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
+            handler.removeCallbacks(stopScanTask);
+            scanner = null;
+            log("Android rejected BLE scan: " + errorCode + " (permissions, radio, or scan throttling)");
+            status("Scan failed (" + errorCode + "). Check Nearby devices + Precise Location, then retry.", false);
             handler.post(listener::onScanFinished);
         }
     };
@@ -130,7 +137,9 @@ public final class BleClient {
         discoveredCount = 0;
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
-            status("BLE scanner unavailable", false);
+            log("Android returned no BluetoothLeScanner; check BLE permissions and adapter state.");
+            status("BLE scanner unavailable; turn Bluetooth off/on, then retry.", false);
+            handler.post(listener::onScanFinished);
             return;
         }
         status("Scanning for nearby BLE devices…", false);
@@ -143,8 +152,10 @@ public final class BleClient {
             scanner.startScan(null, settings, scanCallback);
             handler.postDelayed(stopScanTask, 16000);
         } catch (SecurityException | IllegalStateException e) {
+            scanning = false;
             log("Scan start failed: " + e.getMessage());
-            status("Cannot start Bluetooth scan", false);
+            status("Cannot start Bluetooth scan: check Nearby devices and Precise Location", false);
+            handler.post(listener::onScanFinished);
         }
     }
 
