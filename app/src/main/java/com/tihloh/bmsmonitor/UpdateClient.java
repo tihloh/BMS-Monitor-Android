@@ -140,9 +140,9 @@ public final class UpdateClient {
                     if (Build.VERSION.SDK_INT >= 31)
                         params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED);
                     sessionId = installer.createSession(params);
-                    try (PackageInstaller.Session session = installer.openSession(sessionId);
-                         InputStream input = con.getInputStream();
-                         OutputStream output = session.openWrite("base.apk", 0, -1)) {
+                    try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+                        try (InputStream input = con.getInputStream();
+                             OutputStream output = session.openWrite("base.apk", 0, -1)) {
                         byte[] buf = new byte[16384];
                         int count;
                         long total = 0;
@@ -151,7 +151,8 @@ public final class UpdateClient {
                             if (total > MAX_BYTES) throw new IllegalStateException("APK exceeds maximum size");
                             output.write(buf, 0, count);
                         }
-                        session.fsync(output);
+                            session.fsync(output);
+                        }
                         Intent broadcast = new Intent(activity, UpdateInstallReceiver.class);
                         broadcast.setAction(UpdateInstallReceiver.ACTION_STATUS);
                         PendingIntent pending = PendingIntent.getBroadcast(activity, sessionId,
