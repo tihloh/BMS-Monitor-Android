@@ -430,23 +430,35 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             if (visibleCount == 0) deviceList.removeAllViews();
             visibleCount++;
             totalFound.setText("Devices found: " + visibleCount);
-            String display = name + (likelyBms ? "  •  BMS" : "") + "  (" + rssi + " dBm)";
-            Button choose = button(display, likelyBms);
-            choose.setAllCaps(false);
-            choose.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            LinearLayout item = horizontal();
+            item.setPadding(dp(10), dp(9), dp(8), dp(9));
+            item.setBackground(background(likelyBms ? Color.rgb(232, 250, 247)
+                    : Color.rgb(245, 248, 251), 10, BORDER));
+            LinearLayout labelColumn = vertical();
+            TextView deviceName = text(name + (likelyBms ? "  •  Likely BMS" : ""), 14, NAVY, true);
+            deviceName.setMaxLines(1);
+            labelColumn.addView(deviceName);
+            labelColumn.addView(text(device.getAddress() + "  ·  " + rssi + " dBm",
+                    11, MUTED, false), below(0, 4));
+            item.addView(labelColumn, new LinearLayout.LayoutParams(0, -2, 1));
+            Button choose = button("Connect", likelyBms);
             choose.setOnClickListener(v -> {
+                connectionPending = true;
                 ble.stopScan();
                 deviceList.removeAllViews();
                 deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
                 getPreferences(0).edit().putString("last_bms", device.getAddress()).apply();
-                connectionPending = true;
                 if (manualMac != null) manualMac.setText(device.getAddress());
                 ble.connect(device);
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan again");
+                progress.setVisibility(View.GONE);
             });
-            if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
-            else deviceList.addView(choose, below(0, 6));
+            LinearLayout.LayoutParams c = new LinearLayout.LayoutParams(dp(83), dp(42));
+            c.leftMargin = dp(8);
+            item.addView(choose, c);
+            if (likelyBms) deviceList.addView(item, 0, below(0, 6));
+            else deviceList.addView(item, below(0, 6));
             if (likelyBms) scanHint.setText("Gentai-compatible advertisement found. Tap its name to connect.");
         });
     }
@@ -455,7 +467,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (scanButton == null) return;
             scanButton.setEnabled(true);
-            scanButton.setText("Scan / Connect");
+            scanButton.setText("Scan again");
             progress.setVisibility(View.GONE);
             if (visibleCount == 0 && !ble.isReady() && !connectionPending) {
                 scanHint.setText("No BLE advertisements found. Try Location services / permissions, or use the direct BLE address below.");
