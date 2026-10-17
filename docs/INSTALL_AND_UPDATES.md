@@ -6,7 +6,12 @@
 3. Tap **Scan / Connect**. The progress indicator remains visible during the 16-second scan.
 4. Stand within a meter of the battery. Tap **ECO039E** or **BMC1_039E** in the discovered device list.
 5. When discovery fails, the UI displays actionable troubleshooting status. Tap **Copy log** to report a problem.
-6. On Android 11 and earlier, enable Location permission and the system Location switch as required for BLE discovery.
+6. If the scan returns zero advertisements, choose **Allow & retry** when asked for Location permission, then turn on the phone's system **Location** switch. Some Android 12–16 devices/OEM builds do not supply BLE scan results without both.
+7. The app first scans in low-latency mode and retries with Android's default scan API if nothing is reported after 9 seconds. A completed scan takes at most about 23 seconds.
+8. **Scan troubleshooting** opens Location settings, app permissions, or instructions. For direct connection, enter the BMS's BLE address obtained independently from nRF Connect.
+9. **Copy log** reports scan start, first detected advertisement, scan failure codes, and final advertisement count. This helps distinguish Android permission problems from app parsing problems.
+
+Location is used only to support local Bluetooth device discovery. The app does not read GPS coordinates or upload location data.
 
 ## APK builds
 - **Build Android APK** runs automatically on pull requests and pushes to main; it generates an experimental debug APK.
