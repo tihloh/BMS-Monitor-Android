@@ -112,6 +112,13 @@ public final class BleClient {
     };
 
     private final Runnable stopScanTask = this::stopScan;
+    private final Runnable connectionTimeout = () -> {
+        if (gatt != null && !ready) {
+            log("BLE connection timed out before telemetry was ready");
+            disconnect();
+            status("Connection timed out. Close Gentai/nRF Connect; MAC may have changed.", false);
+        }
+    };
     // Retry with Android's simplest scanner API on vendors returning zero results.
     private final Runnable fallbackScanTask = () -> {
         if (!scanning || scanner == null || discoveredCount > 0) return;
@@ -199,6 +206,7 @@ public final class BleClient {
         try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) status("Bluetooth connection could not start", false);
+            else handler.postDelayed(connectionTimeout, 20000);
         } catch (SecurityException | IllegalArgumentException e) {
             log("Connect failed: " + e.getMessage());
             status("Could not connect", false);
@@ -299,6 +307,7 @@ public final class BleClient {
             handler.post(() -> {
                 if (g != gatt) return;
                 ready = true;
+                handler.removeCallbacks(connectionTimeout);
                 status("Connected — reading live battery telemetry", true);
                 log("Notifications enabled on 0003");
                 pollIndex = 0;
@@ -392,6 +401,7 @@ public final class BleClient {
     public void disconnect() {
         stopScan();
         handler.removeCallbacks(pollTask);
+        handler.removeCallbacks(connectionTimeout);
         ready = false;
         writer = null;
         writeInProgress = false;
