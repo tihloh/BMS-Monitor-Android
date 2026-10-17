@@ -73,7 +73,7 @@ public final class ReleaseUpdater {
                 main.post(() -> {
                     busy = false;
                     if (newest == null) {
-                        callback.onMessage("No published versioned releases found.");
+                        callback.onMessage("No compatible versioned APK yet. Experimental and signed release channels are separate.");
                         return;
                     }
                     int diff = compareVersion(newest.version, BuildConfig.VERSION_NAME);
@@ -104,6 +104,9 @@ public final class ReleaseUpdater {
         for (int i = 0; i < releases.length(); i++) {
             JSONObject release = releases.optJSONObject(i);
             if (release == null || release.optBoolean("draft")) continue;
+            // Experimental debug APKs are published as versioned prereleases.
+            // Production signed installations only consider stable releases.
+            if (release.optBoolean("prerelease") && !BuildConfig.DEBUG) continue;
             String tag = release.optString("tag_name", "");
             if (!tag.matches("v?\\d+\\.\\d+\\.\\d+")) continue;
             String version = tag.startsWith("v") ? tag.substring(1) : tag;
@@ -160,9 +163,10 @@ public final class ReleaseUpdater {
 
     private void showUpdate(Release release) {
         String desc = "BMS Monitor " + release.version + " is available (installed: "
-                + BuildConfig.VERSION_NAME + ").\\n\\n"
-                + "Android will ask you to approve the installation. "
-                + "Updates require the same signing key as your installed APK.";
+                + BuildConfig.VERSION_NAME + ").\n\n"
+                + (BuildConfig.DEBUG
+                  ? "This experimental APK was built on GitHub Actions. Debug APKs may have different signing keys, so Android may require uninstalling the previous experimental build before installing this one. This app has no cloud-stored battery history."
+                  : "Android will ask you to approve the installation. Both APKs must use the same trusted signing key.");
         new AlertDialog.Builder(activity)
                 .setTitle("Update available")
                 .setMessage(desc)
@@ -170,7 +174,14 @@ public final class ReleaseUpdater {
                 .setNeutralButton("Release notes", (dialog, which) -> {
                     activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)));
                 })
-                .setPositiveButton("Update", (dialog, which) -> install(release))
+                .setPositiveButton(BuildConfig.DEBUG ? "Get experimental APK" : "Install update",
+                        (dialog, which) -> {
+                            if (BuildConfig.DEBUG) {
+                                // Never attempt a PackageInstaller in-place replacement
+                                // of CI debug builds with unpredictable signing keys.
+                                activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(release.apkUrl)));
+                            } else install(release);
+                        })
                 .show();
     }
 
