@@ -55,6 +55,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
     private int visibleCount;
+    private boolean connectingToBms;
+    private String scanError = "";
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
@@ -102,7 +104,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         root.addView(connectionCard, below(0, 15));
 
         LinearLayout actions = horizontal();
-        scanButton = button("Scan / Connect", true);
+        scanButton = button("Scan for devices", true);
         scanButton.setOnClickListener(v -> beginScan());
         disconnectButton = button("Disconnect", false);
         disconnectButton.setOnClickListener(v -> {
@@ -300,13 +302,15 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     }
 
     private void scan() {
+        connectingToBms = false;
+        scanError = "";
         visibleCount = 0;
         discovered.clear();
         deviceList.removeAllViews();
-        scanButton.setText("Scanning…");
+        scanButton.setText("Scanning (19 sec)…");
         scanButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE);
-        totalFound.setText("Looking for Gentai BMS…");
+        totalFound.setText("Discovering nearby BLE devices…");
         scanHint.setText("Scanning for 19 seconds. All nearby BLE devices appear here. Move close to the battery.");
         status.setText("Looking for nearby Bluetooth devices…");
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
@@ -354,6 +358,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override public void onStatus(String message, boolean connected) {
         runOnUiThread(() -> {
             if (connection == null) return;
+            if (message.toLowerCase(Locale.US).contains("fail") ||
+                    message.toLowerCase(Locale.US).contains("cannot scan") ||
+                    message.toLowerCase(Locale.US).contains("scanner unavailable") ||
+                    message.toLowerCase(Locale.US).contains("permission")) scanError = message;
             connection.setText(connected ? "●  Connected to BMS" : "○  " + message);
             connection.setTextColor(connected ? CYAN : NAVY);
             if (!message.startsWith("Scanning")) status.setText(message);
@@ -363,28 +371,40 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @SuppressLint("MissingPermission")
     @Override public void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms) {
         runOnUiThread(() -> {
-            if (!discovered.add(device.getAddress())) return;
+            String address = device.getAddress();
+            if (!discovered.add(address)) return;
             if (visibleCount == 0) deviceList.removeAllViews();
             visibleCount++;
-            totalFound.setText("Devices found: " + visibleCount);
-            String display = (likelyBms ? "● " : "") + name
-                    + "   " + rssi + " dBm\n" + device.getAddress();
-            Button choose = button(display, likelyBms);
-            choose.setAllCaps(false);
-            choose.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
-            choose.setOnClickListener(v -> {
+            totalFound.setText("Discovered: " + visibleCount + " BLE devices");
+            if (visibleCount > 36 && !likelyBms) return;
+            LinearLayout item = horizontal();
+            item.setPadding(dp(8), dp(8), dp(8), dp(8));
+            item.setBackground(background(
+                    likelyBms ? Color.rgb(231, 248, 245) : Color.rgb(248, 250, 252),
+                    10, BORDER));
+            LinearLayout details = vertical();
+            details.addView(text(name + (likelyBms ? "  •  BMS" : ""), 14, NAVY, likelyBms));
+            details.addView(text(address + "  ·  " + rssi + " dBm", 11, MUTED, false), below(0, 3));
+            LinearLayout.LayoutParams detailSize = new LinearLayout.LayoutParams(0, -2, 1);
+            detailSize.rightMargin = dp(5);
+            item.addView(details, detailSize);
+            Button connect = button("Connect", likelyBms);
+            connect.setOnClickListener(v -> {
+                connectingToBms = true;
                 ble.stopScan();
                 deviceList.removeAllViews();
                 deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
-                getPreferences(0).edit().putString("last_bms", device.getAddress()).apply();
-                if (manualMac != null) manualMac.setText(device.getAddress());
+                getPreferences(0).edit().putString("last_bms", address).apply();
+                if (manualMac != null) manualMac.setText(address);
                 ble.connect(device);
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan for devices");
+                progress.setVisibility(View.GONE);
             });
-            if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
-            else deviceList.addView(choose, below(0, 6));
-            if (likelyBms) scanHint.setText("Gentai-compatible advertisement found. Tap its name to connect.");
+            item.addView(connect, new LinearLayout.LayoutParams(dp(98), dp(45)));
+            if (likelyBms) deviceList.addView(item, 0, below(0, 6));
+            else deviceList.addView(item, below(0, 6));
+            if (likelyBms) scanHint.setText("Likely Gentai BMS found. Tap Connect beside the device.");
         });
     }
 
@@ -392,13 +412,18 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (scanButton == null) return;
             scanButton.setEnabled(true);
-            scanButton.setText("Scan / Connect");
+            scanButton.setText("Scan for devices");
             progress.setVisibility(View.GONE);
-            if (visibleCount == 0 && !ble.isReady()) {
-                scanHint.setText("Android returned no advertisements. Check precise Location permission and Location switch, then retry. Test with nRF Connect if needed.");
-                status.setText("No Bluetooth LE advertisements received.");
-            } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
-                scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
+            if (connectingToBms || ble.isReady()) return;
+            if (!scanError.isEmpty()) {
+                scanHint.setText("Scan error: " + scanError + ". Check app permissions and retry.");
+                status.setText(scanError);
+            } else if (visibleCount == 0) {
+                totalFound.setText("0 BLE devices discovered");
+                scanHint.setText("Nothing detected. Check Bluetooth, Precise Location and Nearby Devices. If nRF Connect sees ECO039E, enter its address below and tap Connect.");
+                status.setText("No BLE advertisements received. Direct address connection is available.");
+            } else {
+                scanHint.setText("Select ECO039E or BMC1_039E above. If missing, retry closer to the battery.");
             }
         });
     }

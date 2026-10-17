@@ -104,10 +104,14 @@ public final class BleClient {
             for (ScanResult result : results) onScanResult(0, result);
         }
         @Override public void onScanFailed(int errorCode) {
-            log("Android BLE scan failed: error " + errorCode);
-            status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
+            String reason = errorCode == ScanCallback.SCAN_FAILED_APPLICATION_REGISTRATION_FAILED
+                    ? "Android BLE scanner registration failed. Toggle Bluetooth and retry."
+                    : errorCode == ScanCallback.SCAN_FAILED_ALREADY_STARTED
+                    ? "Another BLE scan is already active."
+                    : "Android BLE scanner error code " + errorCode;
+            log("Android BLE scan failed: " + reason);
+            status(reason, false);
             stopScan();
-            handler.post(listener::onScanFinished);
         }
     };
 
@@ -147,7 +151,14 @@ public final class BleClient {
         }
         stopScan();
         discoveredCount = 0;
-        scanner = adapter.getBluetoothLeScanner();
+        try {
+            scanner = adapter.getBluetoothLeScanner();
+        } catch (SecurityException denied) {
+            status("BLE scanner permission denied; open App permissions", false);
+            log("Android rejected access to BluetoothLeScanner");
+            handler.post(listener::onScanFinished);
+            return;
+        }
         if (scanner == null) {
             status("BLE scanner unavailable. Toggle Bluetooth.", false);
             handler.post(listener::onScanFinished);
