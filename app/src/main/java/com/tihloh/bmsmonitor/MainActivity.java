@@ -54,6 +54,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
+    private boolean pendingDirectConnection;
     private boolean connecting;
     private int visibleCount;
 
@@ -292,14 +293,17 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         }
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[] { Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_CONNECT }, PERMISSIONS);
+            pendingDirectConnection = true;
+            requestPermissions(new String[] { Manifest.permission.BLUETOOTH_CONNECT }, PERMISSIONS);
             return;
         }
         if (!ble.bluetoothEnabled()) {
-            status.setText("Turn Bluetooth on and try connecting again.");
+            pendingDirectConnection = true;
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
+            status.setText("Enable Bluetooth to connect to ECO039E.");
             return;
         }
+        pendingDirectConnection = false;
         getPreferences(0).edit().putString("last_bms", address).apply();
         connecting = true;
         scanHint.setText("Connecting directly without scanning…");
@@ -327,6 +331,16 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
+        if (code == PERMISSIONS && pendingDirectConnection) {
+            if (Build.VERSION.SDK_INT < 31 ||
+                    checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
+                connectManual();
+            else {
+                pendingDirectConnection = false;
+                status.setText("Nearby devices permission is needed to connect.");
+            }
+            return;
+        }
         if (code == PERMISSIONS) {
             boolean granted = results.length == permissions.length && results.length > 0;
             for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
@@ -344,7 +358,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == BLUETOOTH_ENABLE) {
-            if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
+            if (res == RESULT_OK || ble.bluetoothEnabled()) {
+                if (pendingDirectConnection) connectManual();
+                else beginScan();
+            }
             else status.setText("Bluetooth must be enabled to detect ECO039E.");
         }
     }
