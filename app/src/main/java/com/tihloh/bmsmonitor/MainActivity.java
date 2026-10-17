@@ -3,364 +3,429 @@ package com.tihloh.bmsmonitor;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.bluetooth.BluetoothDevice;
+import android.bluetooth.BluetoothManager;
+import android.bluetooth.BluetoothAdapter;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
-import java.util.LinkedHashMap;
+import java.util.HashSet;
 import java.util.Locale;
-import java.util.Map;
+import java.util.Set;
 
-/** Compact experimental BMS dashboard; all telemetry stays on the phone. */
-public final class MainActivity extends Activity implements BleClient.Listener {
-    private static final int PERMISSION_REQUEST = 50;
-    private static final int INK = Color.rgb(22, 42, 57);
+public final class MainActivity extends Activity implements BleClient.Listener, ReleaseUpdater.Callback {
+    private static final int PERMISSIONS = 10, BLUETOOTH_ENABLE = 11;
+    private static final int NAVY = Color.rgb(27, 43, 58);
     private static final int MUTED = Color.rgb(99, 116, 132);
-    private static final int TEAL = Color.rgb(14, 120, 141);
-    private static final int BG = Color.rgb(244, 248, 251);
-
+    private static final int CYAN = Color.rgb(0, 124, 145);
+    private static final int BACK = Color.rgb(242, 247, 249);
+    private static final int BORDER = Color.rgb(222, 231, 236);
+    private final Set<String> discovered = new HashSet<>();
     private BleClient ble;
-    private LinearLayout page;
-    private LinearLayout deviceList;
-    private LinearLayout cellsContainer;
-    private TextView connection;
-    private TextView socValue;
-    private TextView condition;
-    private TextView voltage;
-    private TextView current;
-    private TextView power;
-    private TextView remaining;
-    private TextView capacity;
-    private TextView updated;
-    private TextView cellsTitle;
-    private TextView logView;
+    private ReleaseUpdater updater;
+    private LinearLayout deviceList, cellList, logBox;
+    private TextView connection, scanHint, firmwareHint, soc, status, voltage, current, power,
+            remaining, capacity, updated, cellHeading, logText, totalFound;
+    private Button scanButton, disconnectButton;
+    private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
-    private final Map<String, BluetoothDevice> nearby = new LinkedHashMap<>();
+    private boolean pendingAutoConnect = true;
+    private int visibleCount;
 
-    @Override public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-        getWindow().setStatusBarColor(Color.rgb(15, 37, 58));
-        getWindow().setNavigationBarColor(Color.rgb(15, 37, 58));
+    @Override public void onCreate(Bundle saved) {
+        super.onCreate(saved);
+        getWindow().setStatusBarColor(NAVY);
+        getWindow().setNavigationBarColor(NAVY);
         ble = new BleClient(this, this);
-        buildUi();
-        onStatus("Not connected — tap Scan for BMS", false);
-        onLog("Experimental read-only Gentai/ECO BLE monitor ready.");
+        updater = new ReleaseUpdater(this, this);
+        drawUi();
+        onStatus("Not connected", false);
+        onLog("Ready. Scanning requires Bluetooth/Nearby Devices permission.");
+        updater.check(false);
+        // Request permission on first use only when the user taps Scan.
     }
 
-    private void buildUi() {
+    private void drawUi() {
         ScrollView scroll = new ScrollView(this);
         scroll.setFillViewport(true);
-        scroll.setBackgroundColor(BG);
-        page = new LinearLayout(this);
-        page.setOrientation(LinearLayout.VERTICAL);
-        page.setPadding(dp(17), dp(22), dp(17), dp(26));
-        scroll.addView(page);
+        scroll.setBackgroundColor(BACK);
+        LinearLayout root = vertical();
+        root.setPadding(dp(16), dp(22), dp(16), dp(30));
+        scroll.addView(root);
         setContentView(scroll);
 
-        TextView heading = label("BMS Monitor", 26, INK, true);
-        page.addView(heading);
-        TextView sub = label("GENTAI  •  BLUETOOTH EXPERIMENT", 11, MUTED, true);
-        sub.setLetterSpacing(0.09f);
-        page.addView(sub, withTop(0, 6));
+        TextView title = text("BMS Monitor", 25, NAVY, true);
+        root.addView(title);
+        TextView subtitle = text("GENTAI  /  LIVE BATTERY TELEMETRY", 11, CYAN, true);
+        subtitle.setLetterSpacing(0.06f);
+        root.addView(subtitle, below(0, 5));
 
-        LinearLayout connectionCard = card();
-        connection = label("Not connected", 14, INK, true);
-        connectionCard.addView(connection);
-        connectionCard.addView(label("BLE telemetry only · no BMS settings are changed", 12, MUTED, false),
-                withTop(0, 6));
-        page.addView(connectionCard, withTop(0, 16));
-
-        Button scan = button("Scan for BMS", true);
-        scan.setOnClickListener(v -> requestScan());
-        page.addView(scan, withTop(0, 13));
+        LinearLayout connectionCard = panel();
+        LinearLayout topLine = horizontal();
+        connection = text("Not connected", 16, NAVY, true);
+        topLine.addView(connection, new LinearLayout.LayoutParams(0, dp(30), 1));
+        connection.setGravity(Gravity.CENTER_VERTICAL);
+        TextView version = text("v" + BuildConfig.VERSION_NAME, 11, MUTED, true);
+        version.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
+        topLine.addView(version);
+        connectionCard.addView(topLine);
+        status = text("Connect to ECO039E to start reading.", 13, MUTED, false);
+        connectionCard.addView(status, below(0, 5));
+        root.addView(connectionCard, below(0, 15));
 
         LinearLayout actions = horizontal();
-        Button refresh = button("Refresh", false);
-        Button disconnect = button("Disconnect", false);
-        refresh.setOnClickListener(v -> ble.refresh());
-        disconnect.setOnClickListener(v -> {
+        scanButton = button("Scan / Connect", true);
+        scanButton.setOnClickListener(v -> beginScan());
+        disconnectButton = button("Disconnect", false);
+        disconnectButton.setOnClickListener(v -> {
             ble.disconnect();
-            onStatus("Disconnected — tap Scan to reconnect", false);
+            onStatus("Disconnected", false);
+            status.setText("Tap Scan / Connect to reconnect.");
         });
-        actions.addView(refresh, weightedButton());
-        actions.addView(disconnect, weightedButton());
-        page.addView(actions, withTop(0, 3));
+        actions.addView(scanButton, equalButton());
+        actions.addView(disconnectButton, equalButton());
+        root.addView(actions, below(0, 10));
 
-        deviceList = new LinearLayout(this);
-        deviceList.setOrientation(LinearLayout.VERTICAL);
-        page.addView(deviceList, withTop(0, 4));
+        LinearLayout scanCard = panel();
+        LinearLayout scanRow = horizontal();
+        progress = new ProgressBar(this);
+        progress.setIndeterminate(true);
+        progress.setVisibility(View.GONE);
+        LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(dp(20), dp(20));
+        progressLp.rightMargin = dp(8);
+        scanRow.addView(progress, progressLp);
+        totalFound = text("Nearby BMS devices", 14, NAVY, true);
+        scanRow.addView(totalFound);
+        scanCard.addView(scanRow);
+        scanHint = text("Tap Scan / Connect. Gentai and nRF Connect must be disconnected.", 12, MUTED, false);
+        scanCard.addView(scanHint, below(0, 7));
+        deviceList = vertical();
+        scanCard.addView(deviceList, below(0, 4));
+        root.addView(scanCard, below(0, 10));
 
-        LinearLayout chargeCard = card();
-        chargeCard.addView(label("STATE OF CHARGE", 12, MUTED, true));
-        socValue = label("--%", 48, TEAL, true);
-        chargeCard.addView(socValue);
-        condition = label("Waiting for battery data", 13, MUTED, false);
-        chargeCard.addView(condition);
-        page.addView(chargeCard, withTop(0, 18));
+        LinearLayout socPanel = panel();
+        socPanel.addView(text("STATE OF CHARGE", 11, MUTED, true));
+        soc = text("-- %", 44, CYAN, true);
+        socPanel.addView(soc, below(0, 5));
+        updated = text("No readings received yet", 12, MUTED, false);
+        socPanel.addView(updated);
+        root.addView(socPanel, below(0, 15));
 
-        LinearLayout firstMetrics = horizontal();
-        LinearLayout voltsBox = metric("VOLTAGE", "-- V");
-        voltage = (TextView) voltsBox.getChildAt(1);
-        LinearLayout ampsBox = metric("CURRENT", "-- A");
-        current = (TextView) ampsBox.getChildAt(1);
-        firstMetrics.addView(voltsBox, weightedCard());
-        firstMetrics.addView(ampsBox, weightedCard());
-        page.addView(firstMetrics, withTop(0, 10));
+        LinearLayout metrics1 = horizontal();
+        LinearLayout v = metric("TOTAL VOLTAGE", "-- V"); voltage = (TextView) v.getChildAt(1);
+        LinearLayout a = metric("CURRENT", "-- A"); current = (TextView) a.getChildAt(1);
+        metrics1.addView(v, equalCard()); metrics1.addView(a, equalCard());
+        root.addView(metrics1, below(0, 9));
 
-        LinearLayout secondMetrics = horizontal();
-        LinearLayout powerBox = metric("POWER", "-- W");
-        power = (TextView) powerBox.getChildAt(1);
-        LinearLayout remainBox = metric("REMAINING", "-- Ah");
-        remaining = (TextView) remainBox.getChildAt(1);
-        secondMetrics.addView(powerBox, weightedCard());
-        secondMetrics.addView(remainBox, weightedCard());
-        page.addView(secondMetrics, withTop(0, 10));
+        LinearLayout metrics2 = horizontal();
+        LinearLayout w = metric("POWER", "-- W"); power = (TextView) w.getChildAt(1);
+        LinearLayout ah = metric("REMAINING", "-- Ah"); remaining = (TextView) ah.getChildAt(1);
+        metrics2.addView(w, equalCard()); metrics2.addView(ah, equalCard());
+        root.addView(metrics2, below(0, 9));
 
-        LinearLayout detailCard = card();
-        capacity = label("Rated capacity: -- Ah", 14, INK, true);
-        detailCard.addView(capacity);
-        updated = label("Last update: --", 12, MUTED, false);
-        detailCard.addView(updated, withTop(0, 6));
-        page.addView(detailCard, withTop(0, 10));
+        LinearLayout more = panel();
+        capacity = text("Rated capacity: -- Ah", 14, NAVY, true);
+        more.addView(capacity);
+        root.addView(more, below(0, 9));
 
-        LinearLayout cellsCard = card();
-        cellsTitle = label("Cell voltages · awaiting supported packet", 14, INK, true);
-        cellsCard.addView(cellsTitle);
-        cellsContainer = new LinearLayout(this);
-        cellsContainer.setOrientation(LinearLayout.VERTICAL);
-        cellsCard.addView(cellsContainer, withTop(0, 9));
-        page.addView(cellsCard, withTop(0, 10));
+        LinearLayout cells = panel();
+        cellHeading = text("Individual cell voltages", 15, NAVY, true);
+        cells.addView(cellHeading);
+        cellList = vertical();
+        cellList.addView(text("Awaiting a supported response from the BMS.", 12, MUTED, false));
+        cells.addView(cellList, below(0, 9));
+        root.addView(cells, below(0, 10));
 
-        LinearLayout logCard = card();
-        LinearLayout logHeading = horizontal();
-        TextView logLabel = label("Bluetooth log", 15, INK, true);
-        logHeading.addView(logLabel, new LinearLayout.LayoutParams(0, dp(44), 1));
-        logLabel.setGravity(android.view.Gravity.CENTER_VERTICAL);
+        LinearLayout updatePanel = panel();
+        updatePanel.addView(text("App updates", 15, NAVY, true));
+        firmwareHint = text("Automatically checks GitHub Releases every 12 hours while in use.", 12, MUTED, false);
+        updatePanel.addView(firmwareHint, below(0, 5));
+        Button check = button("Check for updates", false);
+        check.setOnClickListener(v -> updater.check(true));
+        updatePanel.addView(check, below(0, 9));
+        root.addView(updatePanel, below(0, 10));
+
+        logBox = panel();
+        LinearLayout logHeader = horizontal();
+        TextView logTitle = text("Bluetooth diagnostics", 15, NAVY, true);
+        logHeader.addView(logTitle, new LinearLayout.LayoutParams(0, dp(44), 1));
+        logTitle.setGravity(Gravity.CENTER_VERTICAL);
         Button copy = button("Copy log", false);
         copy.setTextSize(12);
         copy.setOnClickListener(v -> {
-            ClipboardManager c = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
-            if (c != null) {
-                c.setPrimaryClip(ClipData.newPlainText("BMS Monitor BLE log", logs.toString()));
-                Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show();
-            }
+            ClipboardManager manager = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (manager != null) manager.setPrimaryClip(ClipData.newPlainText("BMS diagnostic log", logs.toString()));
+            Toast.makeText(this, "Log copied", Toast.LENGTH_SHORT).show();
         });
-        logHeading.addView(copy);
-        logCard.addView(logHeading);
-        logView = label("No events yet", 11, MUTED, false);
-        logView.setTypeface(Typeface.MONOSPACE);
-        logView.setTextIsSelectable(true);
-        logView.setMaxLines(12);
-        logCard.addView(logView);
-        page.addView(logCard, withTop(0, 10));
+        logHeader.addView(copy);
+        logBox.addView(logHeader);
+        logText = text("Waiting for events…", 11, MUTED, false);
+        logText.setTypeface(Typeface.MONOSPACE);
+        logText.setTextIsSelectable(true);
+        logText.setMaxLines(10);
+        logBox.addView(logText);
+        root.addView(logBox, below(0, 10));
 
-        page.addView(label("Prototype • not a battery protection instrument", 11, MUTED, false),
-                withTop(0, 14));
+        TextView footer = text("Experimental read-only monitor. Not a battery protection system.", 11, MUTED, false);
+        footer.setGravity(Gravity.CENTER);
+        root.addView(footer, below(0, 15));
     }
 
-    private void requestScan() {
-        String[] permissions;
+    private void beginScan() {
         if (Build.VERSION.SDK_INT >= 31) {
-            permissions = new String[] {
-                Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT
-            };
+            String[] ps = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT};
+            if (checkSelfPermission(ps[0]) != PackageManager.PERMISSION_GRANTED
+                    || checkSelfPermission(ps[1]) != PackageManager.PERMISSION_GRANTED) {
+                status.setText("Android requires Nearby Devices permission before scanning.");
+                requestPermissions(ps, PERMISSIONS);
+                return;
+            }
         } else {
-            permissions = new String[] { Manifest.permission.ACCESS_FINE_LOCATION };
-        }
-        for (String permission : permissions) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(permissions, PERMISSION_REQUEST);
+            if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+                status.setText("Grant Location permission to discover nearby BLE devices.");
+                requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSIONS);
+                return;
+            }
+            LocationManager location = (LocationManager) getSystemService(LOCATION_SERVICE);
+            if (location != null && !location.isProviderEnabled(LocationManager.GPS_PROVIDER)
+                    && !location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                new AlertDialog.Builder(this).setTitle("Enable Location")
+                        .setMessage("On Android 11 and earlier, the system requires Location services enabled for BLE scanning.")
+                        .setPositiveButton("Settings", (d,w) -> startActivity(new Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)))
+                        .setNegativeButton("Cancel", null).show();
                 return;
             }
         }
-        doScan();
+        if (!ble.bluetoothEnabled()) {
+            status.setText("Turn Bluetooth on to scan.");
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
+            return;
+        }
+        scan();
     }
 
-    @SuppressLint("MissingPermission")
-    private void doScan() {
-        nearby.clear();
+    private void scan() {
+        visibleCount = 0;
+        discovered.clear();
         deviceList.removeAllViews();
-        deviceList.addView(label("Scanning… Tap the ECO039E device when it appears.", 12, MUTED, false),
-                withTop(0, 8));
+        scanButton.setText("Scanning…");
+        scanButton.setEnabled(false);
+        progress.setVisibility(View.VISIBLE);
+        totalFound.setText("Looking for Gentai BMS…");
+        scanHint.setText("Scan takes about 16 seconds. Tap ECO039E when it appears.");
+        status.setText("Looking for nearby Bluetooth devices…");
         ble.scan();
     }
 
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode != PERMISSION_REQUEST) return;
-        boolean granted = results.length > 0;
-        for (int value : results) if (value != PackageManager.PERMISSION_GRANTED) granted = false;
-        if (granted) doScan();
-        else onStatus("Bluetooth permission is required to scan", false);
+    @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(code, permissions, results);
+        if (code == PERMISSIONS) {
+            boolean granted = results.length == permissions.length && results.length > 0;
+            for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
+            if (granted) beginScan();
+            else {
+                status.setText("Nearby Devices permission denied. Enable it in Android App Settings.");
+                scanHint.setText("Settings → Apps → BMS Monitor → Permissions → Nearby devices.");
+            }
+        }
     }
 
-    @Override public void onStatus(String status, boolean ready) {
+    @Override protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if (req == BLUETOOTH_ENABLE) {
+            if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
+            else status.setText("Bluetooth must be enabled to detect ECO039E.");
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (updater != null) updater.onResume();
+    }
+
+    @Override public void onStatus(String message, boolean connected) {
         runOnUiThread(() -> {
-            if (connection != null) {
-                connection.setText((ready ? "●  " : "○  ") + status);
-                connection.setTextColor(ready ? TEAL : INK);
+            if (connection == null) return;
+            connection.setText(connected ? "●  Connected to BMS" : "○  " + message);
+            connection.setTextColor(connected ? CYAN : NAVY);
+            if (!message.startsWith("Scanning")) status.setText(message);
+        });
+    }
+
+    @SuppressLint("MissingPermission")
+    @Override public void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms) {
+        runOnUiThread(() -> {
+            if (!discovered.add(device.getAddress())) return;
+            if (visibleCount == 0) deviceList.removeAllViews();
+            visibleCount++;
+            totalFound.setText("Devices found: " + visibleCount);
+            String display = name + (likelyBms ? "  •  BMS" : "") + "  (" + rssi + " dBm)";
+            Button choose = button(display, likelyBms);
+            choose.setAllCaps(false);
+            choose.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            choose.setOnClickListener(v -> {
+                ble.stopScan();
+                deviceList.removeAllViews();
+                deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
+                ble.connect(device);
+                scanButton.setEnabled(true);
+                scanButton.setText("Scan / Connect");
+            });
+            if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
+            else deviceList.addView(choose, below(0, 6));
+            if (likelyBms) scanHint.setText("Gentai-compatible advertisement found. Tap its name to connect.");
+        });
+    }
+
+    @Override public void onScanFinished() {
+        runOnUiThread(() -> {
+            if (scanButton == null) return;
+            scanButton.setEnabled(true);
+            scanButton.setText("Scan / Connect");
+            progress.setVisibility(View.GONE);
+            if (visibleCount == 0 && !ble.isReady()) {
+                scanHint.setText("No devices discovered. Move closer, turn Bluetooth off/on, close the Gentai app, then rescan.");
+                status.setText("No BLE devices found — see troubleshooting instructions below.");
+            } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
+                scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
             }
         });
     }
 
-    @SuppressLint("MissingPermission")
-    @Override public void onDevice(BluetoothDevice device, String name, int rssi) {
-        if (nearby.containsKey(device.getAddress())) return;
-        nearby.put(device.getAddress(), device);
-        if (nearby.size() == 1) deviceList.removeAllViews();
-        Button choice = button(name + "  ·  " + rssi + " dBm", false);
-        choice.setAllCaps(false);
-        choice.setGravity(android.view.Gravity.CENTER_VERTICAL | android.view.Gravity.START);
-        choice.setOnClickListener(v -> {
-            deviceList.removeAllViews();
-            deviceList.addView(label("Selected: " + name + " (" + device.getAddress() + ")", 12, MUTED, false));
-            ble.connect(device);
-        });
-        deviceList.addView(choice, withTop(0, 5));
-    }
-
-    @Override public void onInfo(BatteryProtocol.BatteryInfo info) {
+    @Override public void onInfo(BatteryProtocol.BatteryInfo b) {
         runOnUiThread(() -> {
-            socValue.setText(String.format(Locale.US, "%.0f%%", info.socPercent));
-            voltage.setText(String.format(Locale.US, "%.2f V", info.voltageV));
-            current.setText(String.format(Locale.US, "%+.2f A", info.currentA));
-            power.setText(String.format(Locale.US, "%+.1f W", info.powerW));
-            remaining.setText(String.format(Locale.US, "%.2f Ah", info.remainingAh));
-            capacity.setText(String.format(Locale.US, "Rated capacity: %.1f Ah", info.totalAh));
-            condition.setText(info.currentA < -0.03 ? "Discharging" :
-                    info.currentA > 0.03 ? "Charging" : "Idle");
-            updated.setText("Last update: " +
-                    new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()));
+            soc.setText(String.format(Locale.US, "%.0f %%", b.socPercent));
+            voltage.setText(String.format(Locale.US, "%.2f V", b.voltageV));
+            current.setText(String.format(Locale.US, "%+.2f A", b.currentA));
+            power.setText(String.format(Locale.US, "%+.1f W", b.powerW));
+            remaining.setText(String.format(Locale.US, "%.2f Ah", b.remainingAh));
+            capacity.setText(String.format(Locale.US, "Rated capacity: %.1f Ah", b.totalAh));
+            String condition = b.currentA < -0.03 ? "Discharging" : b.currentA > 0.03 ? "Charging" : "Idle";
+            updated.setText(condition + "  •  Updated " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()));
         });
     }
 
     @Override public void onCells(double[] cells) {
         runOnUiThread(() -> {
-            cellsContainer.removeAllViews();
-            if (cells.length == 0) return;
+            cellList.removeAllViews();
             double min = Double.MAX_VALUE, max = 0;
             for (double v : cells) { min = Math.min(min, v); max = Math.max(max, v); }
-            cellsTitle.setText(String.format(Locale.US,
-                    "%d cells · range %.3f–%.3f V · Δ %.0f mV",
-                    cells.length, min, max, (max - min) * 1000));
-            for (int first = 0; first < cells.length; first += 4) {
+            cellHeading.setText(String.format(Locale.US, "%d cells  ·  spread %.0f mV", cells.length, (max - min) * 1000));
+            for (int i = 0; i < cells.length; i += 4) {
                 LinearLayout row = horizontal();
-                for (int i = first; i < Math.min(first + 4, cells.length); i++) {
-                    TextView item = label(String.format(Locale.US, "%02d\n%.3f V", i + 1, cells[i]),
-                            12, INK, true);
-                    item.setGravity(android.view.Gravity.CENTER);
-                    item.setBackground(rounded(Color.rgb(237, 247, 249), 10));
+                for (int k = i; k < Math.min(i + 4, cells.length); k++) {
+                    TextView t = text(String.format(Locale.US, "%02d\n%.3f V", k+1, cells[k]), 12, NAVY, true);
+                    t.setGravity(Gravity.CENTER);
+                    t.setBackground(background(Color.rgb(235, 248, 250), 9, 0));
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(58), 1);
                     lp.setMargins(dp(2), dp(2), dp(2), dp(2));
-                    row.addView(item, lp);
+                    row.addView(t, lp);
                 }
-                cellsContainer.addView(row);
+                cellList.addView(row);
             }
         });
     }
 
-    @Override public void onLog(String entry) {
+    @Override public void onLog(String message) {
         runOnUiThread(() -> {
-            String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
-            logs.insert(0, time + "  " + entry + "\n");
+            String stamp = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
+            logs.insert(0, stamp + "  " + message + "\n");
             if (logs.length() > 12000) logs.setLength(12000);
-            if (logView != null) logView.setText(logs.toString());
+            if (logText != null) logText.setText(logs.toString());
         });
     }
 
+    @Override public void onMessage(String message) {
+        runOnUiThread(() -> { if (firmwareHint != null) firmwareHint.setText(message); });
+    }
+
+    @Override public void onVersion(String version) {
+        onLog("Available GitHub version: " + version);
+    }
+
+    private LinearLayout vertical() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        return layout;
+    }
+    private LinearLayout horizontal() {
+        LinearLayout layout = new LinearLayout(this);
+        layout.setOrientation(LinearLayout.HORIZONTAL);
+        layout.setGravity(Gravity.CENTER_VERTICAL);
+        return layout;
+    }
+    private LinearLayout panel() {
+        LinearLayout card = vertical();
+        card.setPadding(dp(15), dp(14), dp(15), dp(14));
+        card.setBackground(background(Color.WHITE, 15, BORDER));
+        card.setElevation(dp(1));
+        return card;
+    }
+    private LinearLayout metric(String name, String firstValue) {
+        LinearLayout m = panel();
+        m.addView(text(name, 11, MUTED, true));
+        m.addView(text(firstValue, 22, NAVY, true), below(0, 8));
+        return m;
+    }
+    private TextView text(String label, int sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(label); t.setTextSize(sp); t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        return t;
+    }
+    private Button button(String label, boolean primary) {
+        Button b = new Button(this);
+        b.setText(label);
+        b.setTextSize(13);
+        b.setAllCaps(false);
+        b.setTextColor(primary ? Color.WHITE : NAVY);
+        b.setBackground(background(primary ? CYAN : Color.rgb(232, 240, 244), 11, 0));
+        b.setPadding(dp(9), dp(4), dp(9), dp(4));
+        b.setMinHeight(dp(44));
+        return b;
+    }
+    private GradientDrawable background(int fill, int radius, int stroke) {
+        GradientDrawable d = new GradientDrawable();
+        d.setColor(fill); d.setCornerRadius(dp(radius));
+        if (stroke != 0) d.setStroke(dp(1), stroke);
+        return d;
+    }
+    private LinearLayout.LayoutParams below(int width, int top) {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(
+                width == 0 ? -1 : dp(width), -2);
+        p.topMargin = dp(top); return p;
+    }
+    private LinearLayout.LayoutParams equalButton() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, dp(46), 1);
+        p.setMargins(dp(3), 0, dp(3), 0); return p;
+    }
+    private LinearLayout.LayoutParams equalCard() {
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(0, -2, 1);
+        p.setMargins(dp(3), 0, dp(3), 0); return p;
+    }
+    private int dp(float n) { return (int) (getResources().getDisplayMetrics().density * n + .5f); }
     @Override protected void onDestroy() {
         if (ble != null) ble.close();
         super.onDestroy();
     }
-
-    private LinearLayout metric(String title, String value) {
-        LinearLayout out = card();
-        out.addView(label(title, 11, MUTED, true));
-        TextView big = label(value, 21, INK, true);
-        out.addView(big, withTop(0, 9));
-        return out;
-    }
-
-    private LinearLayout card() {
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.VERTICAL);
-        l.setPadding(dp(15), dp(15), dp(15), dp(15));
-        l.setBackground(rounded(Color.WHITE, 17));
-        l.setElevation(dp(2));
-        return l;
-    }
-
-    private LinearLayout horizontal() {
-        LinearLayout l = new LinearLayout(this);
-        l.setOrientation(LinearLayout.HORIZONTAL);
-        return l;
-    }
-
-    private Button button(String text, boolean primary) {
-        Button b = new Button(this);
-        b.setText(text);
-        b.setTextSize(14);
-        b.setAllCaps(false);
-        b.setTextColor(primary ? Color.WHITE : INK);
-        b.setBackground(rounded(primary ? TEAL : Color.rgb(227, 237, 243), 11));
-        b.setPadding(dp(12), dp(8), dp(12), dp(8));
-        b.setMinHeight(dp(44));
-        return b;
-    }
-
-    private TextView label(String text, int size, int color, boolean bold) {
-        TextView l = new TextView(this);
-        l.setText(text);
-        l.setTextColor(color);
-        l.setTextSize(size);
-        if (bold) l.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
-        return l;
-    }
-
-    private GradientDrawable rounded(int color, int radius) {
-        GradientDrawable shape = new GradientDrawable();
-        shape.setColor(color);
-        shape.setCornerRadius(dp(radius));
-        return shape;
-    }
-
-    private LinearLayout.LayoutParams withTop(int width, int top) {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
-                width <= 0 ? LinearLayout.LayoutParams.MATCH_PARENT : dp(width),
-                LinearLayout.LayoutParams.WRAP_CONTENT);
-        lp.topMargin = dp(top);
-        return lp;
-    }
-
-    private LinearLayout.LayoutParams weightedCard() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0,
-                LinearLayout.LayoutParams.WRAP_CONTENT, 1);
-        lp.leftMargin = dp(3);
-        lp.rightMargin = dp(3);
-        return lp;
-    }
-
-    private LinearLayout.LayoutParams weightedButton() {
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(46), 1);
-        lp.leftMargin = dp(3);
-        lp.rightMargin = dp(3);
-        return lp;
-    }
-
-    private int dp(float v) { return (int) (getResources().getDisplayMetrics().density * v + 0.5f); }
 }
