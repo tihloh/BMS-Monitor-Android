@@ -46,7 +46,7 @@ public final class MainActivity extends Activity implements BleClient.Listener {
     private UpdateManager updater;
     private final Set<String> seen=new HashSet<>();
     private final StringBuilder history=new StringBuilder();
-    private boolean automaticConnection=false, showingLogs=false;
+    private boolean automaticConnection=false, showingLogs=false, firstResume=true;
     private int deviceCount=0;
     private String preferredAddress="";
     private TextView status, guidance, scanCount, soc, mode, voltage, current, power, remaining,
@@ -69,6 +69,8 @@ public final class MainActivity extends Activity implements BleClient.Listener {
 
     @Override protected void onResume() {
         super.onResume();
+        if(!firstResume && updater!=null) updater.check(false,this::offerUpdate,e->onLog("Update check: "+e));
+        firstResume=false;
         if(ble!=null && hasPermissions() && !ble.isReady() && !automaticConnection) {
             // Begin automatic discovery only for a previously selected battery.
             if(!preferredAddress.isEmpty()) scan(true);
