@@ -36,10 +36,11 @@ import java.util.Set;
 
 public final class MainActivity extends Activity implements BleClient.Listener, ReleaseUpdater.Callback {
     private static final int PERMISSIONS = 10, BLUETOOTH_ENABLE = 11;
+    private static final String KNOWN_BMS_MAC = "0B:23:EB:D7:03:9E";
     private static final int NAVY = Color.rgb(27, 43, 58);
     private static final int MUTED = Color.rgb(99, 116, 132);
     private static final int CYAN = Color.rgb(0, 124, 145);
-    private static final int BACK = Color.rgb(242, 247, 249);
+    private static final int BACK = Color.rgb(246, 249, 252);
     private static final int BORDER = Color.rgb(222, 231, 236);
     private final Set<String> discovered = new HashSet<>();
     private BleClient ble;
@@ -79,9 +80,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scroll.addView(root);
         setContentView(scroll);
 
-        TextView title = text("BMS Monitor", 25, NAVY, true);
+        TextView title = text("Battery Monitor", 25, NAVY, true);
         root.addView(title);
-        TextView subtitle = text("GENTAI  /  LIVE BATTERY TELEMETRY", 11, CYAN, true);
+        TextView subtitle = text("GENTAI · ECO039E · LIVE BATTERY DATA", 11, CYAN, true);
         subtitle.setLetterSpacing(0.06f);
         root.addView(subtitle, below(0, 5));
 
@@ -98,8 +99,12 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionCard.addView(status, below(0, 5));
         root.addView(connectionCard, below(0, 15));
 
+        Button quickConnect = button("Connect to my Gentai BMS", true);
+        quickConnect.setTextSize(15);
+        quickConnect.setOnClickListener(v -> connectKnown());
+        root.addView(quickConnect, below(0, 12));
         LinearLayout actions = horizontal();
-        scanButton = button("Scan / Connect", true);
+        scanButton = button("Scan nearby devices", false);
         scanButton.setOnClickListener(v -> beginScan());
         disconnectButton = button("Disconnect", false);
         disconnectButton.setOnClickListener(v -> {
@@ -119,10 +124,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(dp(20), dp(20));
         progressLp.rightMargin = dp(8);
         scanRow.addView(progress, progressLp);
-        totalFound = text("Nearby BMS devices", 14, NAVY, true);
+        totalFound = text("Nearby Bluetooth devices", 14, NAVY, true);
         scanRow.addView(totalFound);
         scanCard.addView(scanRow);
-        scanHint = text("Tap Scan / Connect. Gentai and nRF Connect must be disconnected.", 12, MUTED, false);
+        scanHint = text("Shows all Bluetooth LE devices. If scanning fails, use Direct Connect above.", 12, MUTED, false);
         scanCard.addView(scanHint, below(0, 7));
         deviceList = vertical();
         scanCard.addView(deviceList, below(0, 4));
@@ -131,7 +136,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setSingleLine(true);
         manualMac.setTextSize(13);
         manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
-        manualMac.setText(getPreferences(0).getString("last_bms", ""));
+        manualMac.setText(getPreferences(0).getString("last_bms", KNOWN_BMS_MAC));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
         manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
@@ -143,6 +148,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         directRow.addView(manualConnect, new LinearLayout.LayoutParams(dp(98), dp(44)));
         scanCard.addView(text("If the scan doesn't find ECO039E, enter its BLE address from nRF Connect:", 12, MUTED, false), below(0, 10));
         scanCard.addView(directRow, below(0, 5));
+        Button scanHelp = button("Bluetooth detection help", false);
+        scanHelp.setOnClickListener(v -> showScanHelp());
+        scanCard.addView(scanHelp, below(0, 9));
         root.addView(scanCard, below(0, 10));
 
         LinearLayout socPanel = panel();
@@ -180,9 +188,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
         LinearLayout updatePanel = panel();
         updatePanel.addView(text("App updates", 15, NAVY, true));
-        firmwareHint = text("Checks on launch and approximately hourly in the background. Android confirms installation.", 12, MUTED, false);
+        firmwareHint = text("GitHub release checks; in-place updates need stable APK signing.", 12, MUTED, false);
         updatePanel.addView(firmwareHint, below(0, 5));
-        Button check = button("Check for updates", false);
+        Button check = button("Check for app updates", false);
         check.setOnClickListener(v -> updater.check(true));
         updatePanel.addView(check, below(0, 9));
         if (Build.VERSION.SDK_INT >= 33) {
@@ -222,6 +230,50 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         TextView footer = text("Experimental read-only monitor. Not a battery protection system.", 11, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         root.addView(footer, below(0, 15));
+    }
+
+    private boolean locationOn() {
+        LocationManager manager = (LocationManager) getSystemService(LOCATION_SERVICE);
+        return manager != null && (manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+    }
+
+    private void connectKnown() {
+        if (Build.VERSION.SDK_INT >= 31 &&
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSIONS);
+            status.setText("Grant Nearby devices permission then tap Connect again.");
+            return;
+        }
+        if (!ble.bluetoothEnabled()) {
+            startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
+            status.setText("Enable Bluetooth, then tap Connect again.");
+            return;
+        }
+        String address = manualMac.getText().toString().trim().toUpperCase(Locale.US);
+        if (!address.matches("[0-9A-F]{2}(:[0-9A-F]{2}){5}")) address = KNOWN_BMS_MAC;
+        manualMac.setText(address);
+        getPreferences(0).edit().putString("last_bms", address).apply();
+        status.setText("Connecting directly to " + address + " (no scan required)…");
+        onLog("Direct connection to " + address);
+        ble.connectByAddress(address);
+    }
+
+    private void showScanHelp() {
+        new AlertDialog.Builder(this)
+                .setTitle("Bluetooth detection help")
+                .setMessage("1. Force-stop Gentai and nRF Connect.\n\n" +
+                        "2. Enable Bluetooth and Nearby devices permission for BMS Monitor.\n\n" +
+                        "3. Enable Android Location if needed (currently " +
+                        (locationOn() ? "ON" : "OFF") + "). Some phones need it for BLE scans.\n\n" +
+                        "4. Try Scan nearby devices or direct-connect to ECO039E.\n\n" +
+                        "5. Copy Bluetooth diagnostics if nothing works.")
+                .setPositiveButton("Location settings", (d,w) ->
+                        startActivity(new Intent(android.provider.Settings.ACTION_LOCATION_SOURCE_SETTINGS)))
+                .setNeutralButton("App permissions", (d,w) ->
+                        startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                android.net.Uri.parse("package:" + getPackageName()))))
+                .setNegativeButton("Close", null).show();
     }
 
     private void beginScan() {
@@ -284,8 +336,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scanButton.setText("Scanning…");
         scanButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE);
-        totalFound.setText("Looking for Gentai BMS…");
-        scanHint.setText("Scan takes about 16 seconds. Tap ECO039E when it appears.");
+        totalFound.setText("Scanning all nearby BLE devices…");
+        scanHint.setText("Scanning for 20 seconds. Tap ECO039E if it appears.");
         status.setText("Looking for nearby Bluetooth devices…");
         ble.scan();
     }
@@ -295,7 +347,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         if (code == PERMISSIONS) {
             boolean granted = results.length == permissions.length && results.length > 0;
             for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
-            if (granted) beginScan();
+            if (granted) status.setText("Permission granted. Tap Connect or Scan again.");
             else {
                 status.setText("Nearby Devices permission denied. Enable it in Android App Settings.");
                 scanHint.setText("Settings → Apps → BMS Monitor → Permissions → Nearby devices.");
@@ -306,7 +358,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
         if (req == BLUETOOTH_ENABLE) {
-            if (res == RESULT_OK || ble.bluetoothEnabled()) beginScan();
+            if (res == RESULT_OK || ble.bluetoothEnabled()) status.setText("Bluetooth on. Tap Connect to my Gentai BMS.");
             else status.setText("Bluetooth must be enabled to detect ECO039E.");
         }
     }
@@ -353,7 +405,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 if (manualMac != null) manualMac.setText(device.getAddress());
                 ble.connect(device);
                 scanButton.setEnabled(true);
-                scanButton.setText("Scan / Connect");
+                scanButton.setText("Scan nearby devices");
             });
             if (likelyBms) deviceList.addView(choose, 0, below(0, 6));
             else deviceList.addView(choose, below(0, 6));
@@ -365,11 +417,14 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (scanButton == null) return;
             scanButton.setEnabled(true);
-            scanButton.setText("Scan / Connect");
+            scanButton.setText("Scan nearby devices");
             progress.setVisibility(View.GONE);
             if (visibleCount == 0 && !ble.isReady()) {
-                scanHint.setText("No devices discovered. Move closer, turn Bluetooth off/on, close the Gentai app, then rescan.");
-                status.setText("No BLE devices found — see troubleshooting instructions below.");
+                scanHint.setText("No devices found. Try Direct Connect above or Bluetooth detection help.");
+                status.setText("No BLE devices found. Location switch: " +
+                        (locationOn() ? "ON" : "OFF") + ". Try Direct Connect.");
+                onLog("Zero scan results; Android " + Build.VERSION.SDK_INT +
+                        "; Bluetooth on=" + ble.bluetoothEnabled() + "; Location on=" + locationOn());
             } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
                 scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
             }
@@ -465,7 +520,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         b.setTextColor(primary ? Color.WHITE : NAVY);
         b.setBackground(background(primary ? CYAN : Color.rgb(232, 240, 244), 11, 0));
         b.setPadding(dp(9), dp(4), dp(9), dp(4));
-        b.setMinHeight(dp(44));
+        b.setMinHeight(dp(46));
         return b;
     }
     private GradientDrawable background(int fill, int radius, int stroke) {
