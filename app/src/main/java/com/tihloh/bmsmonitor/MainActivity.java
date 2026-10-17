@@ -244,10 +244,10 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private void showScanHelp() {
         new AlertDialog.Builder(this)
                 .setTitle("Bluetooth discovery help")
-                .setMessage("1. Enable Bluetooth and system Location.\\n"
-                        + "2. Allow Nearby devices permission for BMS Monitor.\\n"
-                        + "3. Force-stop Gentai and nRF Connect while testing.\\n"
-                        + "4. Move within 1 meter of ECO039E and scan again.\\n\\n"
+                .setMessage("1. Enable Bluetooth and system Location.\n"
+                        + "2. Allow Nearby devices permission for BMS Monitor.\n"
+                        + "3. Force-stop Gentai and nRF Connect while testing.\n"
+                        + "4. Move within 1 meter of ECO039E and scan again.\n\n"
                         + "Still empty? Use the BLE address shown in your nRF Connect scan. "
                         + "The address bypasses discovery and does not require Location permission.")
                 .setPositiveButton("Location settings", (d, w) -> {
@@ -459,7 +459,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             item.addView(choose, c);
             if (likelyBms) deviceList.addView(item, 0, below(0, 6));
             else deviceList.addView(item, below(0, 6));
-            if (likelyBms) scanHint.setText("Gentai-compatible advertisement found. Tap its name to connect.");
+            if (likelyBms) scanHint.setText("Gentai-compatible advertisement found. Tap Connect beside the device.");
         });
     }
 
