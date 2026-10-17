@@ -8,7 +8,7 @@ Native Android **experimental** Bluetooth LE monitor for Gentai/ECO-compatible 8
 - Scan without device-name filters, show all BLE devices, stronger scan settings, 18-second discovery, permission/location instructions and clearer timeout errors.
 - Remember your selected BMS (ECO039E) to reconnect on later launches.
 - Bluetooth diagnostic log hidden under **Diagnostics**, with a copy button.
-- GitHub Releases update check on app launch (at most every 12 hours) and via **Updates**. New versions prompt to download and install using Android's PackageInstaller (requires Android confirmation).
+- GitHub Releases update checks on app launch (at most every 12 hours), hourly network-aware background checks, and manual checks via **Updates**. Android notifications appear when permission is granted. New versions prompt to download and install using Android's PackageInstaller (requires Android confirmation).
 - Source-based release signing uses the same four GitHub Actions keystore secrets approach as the owner's POS app.
 
 ## Use
