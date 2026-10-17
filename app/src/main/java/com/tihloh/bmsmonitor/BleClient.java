@@ -95,18 +95,36 @@ public final class BleClient {
             }
             final boolean likelyBms = likely;
             discoveredCount++;
+            if (discoveredCount <= 10 || likelyBms)
+                log("BLE: " + finalName + " / " + device.getAddress() + " / " + rssi + " dBm");
             handler.post(() -> listener.onDevice(device, finalName, rssi, likelyBms));
         }
 
+        @Override public void onBatchScanResults(java.util.List<ScanResult> results) {
+            for (ScanResult result : results) onScanResult(0, result);
+        }
         @Override public void onScanFailed(int errorCode) {
-            scanning = false;
-            log("Android BLE scan failed: code " + errorCode);
+            log("Android BLE scan failed: error " + errorCode);
             status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
+            stopScan();
             handler.post(listener::onScanFinished);
         }
     };
 
     private final Runnable stopScanTask = this::stopScan;
+    // Retry with Android's simplest scanner API on vendors returning zero results.
+    private final Runnable fallbackScanTask = () -> {
+        if (!scanning || scanner == null || discoveredCount > 0) return;
+        log("No advertisements; retrying with default BLE scanner parameters");
+        try {
+            scanner.stopScan(scanCallback);
+            scanner.startScan(scanCallback);
+        } catch (SecurityException | IllegalStateException e) {
+            log("Fallback scanner failed: " + e.getMessage());
+            status("Cannot scan. Check Nearby devices and Location.", false);
+            stopScan();
+        }
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -124,13 +142,15 @@ public final class BleClient {
     public void scan() {
         if (!bluetoothEnabled()) {
             status("Turn on Bluetooth, then scan again", false);
+            handler.post(listener::onScanFinished);
             return;
         }
         stopScan();
         discoveredCount = 0;
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
-            status("BLE scanner unavailable", false);
+            status("BLE scanner unavailable. Toggle Bluetooth.", false);
+            handler.post(listener::onScanFinished);
             return;
         }
         status("Scanning for nearby BLE devices…", false);
@@ -141,15 +161,20 @@ public final class BleClient {
                     .build();
             scanning = true;
             scanner.startScan(null, settings, scanCallback);
-            handler.postDelayed(stopScanTask, 16000);
+            log("BLE scan started; no device filters; low-latency mode");
+            handler.postDelayed(fallbackScanTask, 8500);
+            handler.postDelayed(stopScanTask, 19000);
         } catch (SecurityException | IllegalStateException e) {
-            log("Scan start failed: " + e.getMessage());
-            status("Cannot start Bluetooth scan", false);
+            scanning = false;
+            log("Scan start failed: " + e.getClass().getSimpleName() + " / " + e.getMessage());
+            status("Cannot scan. Check Nearby devices + Location permission.", false);
+            handler.post(listener::onScanFinished);
         }
     }
 
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
+        handler.removeCallbacks(fallbackScanTask);
         boolean wasScanning = scanning;
         scanning = false;
         if (scanner != null) {
