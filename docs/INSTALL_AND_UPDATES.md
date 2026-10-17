@@ -31,3 +31,11 @@ Run **Actions → Publish signed APK → Run workflow**, choose a version name (
 The 0.1.0 experimental APK was signed with a different, temporary debug key. Back up anything you need from the app (currently no user-managed cloud storage), **uninstall the debug app once**, and install the first stable signed APK. Future stable releases can then update in place.
 
 Android always requires installation approval for sideloaded APK updates. BMS Monitor never bypasses this system restriction.
+
+## Android 12–16 scan troubleshooting (v0.2.2)
+- Scan requires **Nearby Devices** (Bluetooth Scan and Connect) **and Fine Location** runtime permissions; this corrects the previous 12+ manifest restriction.
+- Turn **Location** ON in phone Quick Settings before scanning. Some Android vendor Bluetooth stacks do not expose advertisements otherwise.
+- Tap **Scan diagnostics / permissions** on the main screen to see all current access flags and raw scan result counts. This catches Android scan errors that previously looked like an empty list.
+- Scan lists **all** BLE advertisements, not only names containing BMS. ECO039E should be highlighted.
+- If scanning still yields zero advertisements, direct-connect to the observed device address from nRF Connect; do not assume any particular address belongs to every battery.
+- Existing GitHub Release update checks are retained. Experimental debug builds are signed separately on CI; for real in-place auto-updates configure a permanent private signing key and publish versioned APKs.

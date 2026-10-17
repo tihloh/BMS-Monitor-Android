@@ -29,7 +29,7 @@ public final class BleClient {
     public interface Listener {
         void onStatus(String status, boolean ready);
         void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms);
-        void onScanFinished();
+        void onScanFinished(int rawAdvertisements, int scanError);
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onCells(double[] voltages);
         void onLog(String entry);
@@ -51,6 +51,7 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private volatile boolean ready;
     private int discoveredCount;
+    private int scanError;
     private volatile boolean scanning;
     private int pollIndex;
     private boolean writeInProgress;
@@ -77,6 +78,8 @@ public final class BleClient {
 
     private final ScanCallback scanCallback = new ScanCallback() {
         @Override public void onScanResult(int callbackType, ScanResult result) {
+            if (!scanning || result == null || result.getDevice() == null) return;
+            try {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
             if (name == null || name.isEmpty()) {
@@ -95,14 +98,23 @@ public final class BleClient {
             }
             final boolean likelyBms = likely;
             discoveredCount++;
+            if (discoveredCount <= 5 || likelyBms) log("Advertisement " + finalName + " (" + rssi + " dBm)"
+                    + (likelyBms ? " [potential BMS]" : ""));
             handler.post(() -> listener.onDevice(device, finalName, rssi, likelyBms));
+            } catch (SecurityException | IllegalArgumentException e) {
+                log("Cannot read BLE advertisement: " + e.getClass().getSimpleName());
+            }
+        }
+
+        @Override public void onBatchScanResults(List<ScanResult> results) {
+            if (results != null) for (ScanResult result : results) onScanResult(0, result);
         }
 
         @Override public void onScanFailed(int errorCode) {
-            scanning = false;
+            scanError = errorCode;
             log("Android BLE scan failed: code " + errorCode);
-            status("Scan failed (" + errorCode + "). Try Bluetooth off/on and rescan.", false);
-            handler.post(listener::onScanFinished);
+            status("Scan failed (" + errorCode + "). Check Bluetooth permissions.", false);
+            stopScan();
         }
     };
 
@@ -128,6 +140,7 @@ public final class BleClient {
         }
         stopScan();
         discoveredCount = 0;
+        scanError = 0;
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
             status("BLE scanner unavailable", false);
@@ -141,10 +154,13 @@ public final class BleClient {
                     .build();
             scanning = true;
             scanner.startScan(null, settings, scanCallback);
+            log("BLE scan started (unfiltered, low latency, 16 s)");
             handler.postDelayed(stopScanTask, 16000);
         } catch (SecurityException | IllegalStateException e) {
-            log("Scan start failed: " + e.getMessage());
-            status("Cannot start Bluetooth scan", false);
+            scanError = -1;
+            log("Scan start failed: " + e.getClass().getSimpleName() + ": " + e.getMessage());
+            status("Cannot start Bluetooth scan; check permissions", false);
+            stopScan();
         }
     }
 
@@ -158,8 +174,10 @@ public final class BleClient {
             scanner = null;
         }
         if (wasScanning) {
-            log("Scan completed; found " + discoveredCount + " advertisements");
-            handler.post(listener::onScanFinished);
+            log("Scan completed; found " + discoveredCount + " advertisements (error " + scanError + ")");
+            final int count = discoveredCount;
+            final int error = scanError;
+            handler.post(() -> listener.onScanFinished(count, error));
         }
     }
 
