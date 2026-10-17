@@ -12,7 +12,9 @@ import android.bluetooth.BluetoothManager;
 import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
-import android.bluetooth.le.ScanResult;\nimport android.os.ParcelUuid;\nimport java.util.ArrayList;
+import android.bluetooth.le.ScanResult;
+import android.os.ParcelUuid;
+import java.util.ArrayList;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -27,7 +29,8 @@ import java.util.UUID;
 public final class BleClient {
     public interface Listener {
         void onStatus(String status, boolean ready);
-        void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms);\n        void onScanFinished();
+        void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms);
+        void onScanFinished();
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onCells(double[] voltages);
         void onLog(String entry);
@@ -73,16 +76,29 @@ public final class BleClient {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) {\n                try { name = result.getDevice().getName(); } catch (SecurityException ignored) { }\n            }
+            if (name == null || name.isEmpty()) {
+                try { name = result.getDevice().getName(); } catch (SecurityException ignored) { }
+            }
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
-            boolean likely = finalName.toUpperCase(java.util.Locale.US).startsWith("ECO") ||\n                    finalName.toUpperCase(java.util.Locale.US).contains("BMS") ||\n                    finalName.toUpperCase(java.util.Locale.US).startsWith("BMC");\n            if (result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null) {\n                for (ParcelUuid u : result.getScanRecord().getServiceUuids()) {\n                    String id = u.getUuid().toString();\n                    if (id.startsWith("0000ff00") || id.startsWith("00000001")) likely = true;\n                }\n            }\n            final boolean bms = likely;\n            handler.post(() -> listener.onDevice(device, finalName, rssi, bms));
+            boolean likely = finalName.toUpperCase(java.util.Locale.US).startsWith("ECO") ||
+                    finalName.toUpperCase(java.util.Locale.US).contains("BMS") ||
+                    finalName.toUpperCase(java.util.Locale.US).startsWith("BMC");
+            if (result.getScanRecord() != null && result.getScanRecord().getServiceUuids() != null) {
+                for (ParcelUuid u : result.getScanRecord().getServiceUuids()) {
+                    String id = u.getUuid().toString();
+                    if (id.startsWith("0000ff00") || id.startsWith("00000001")) likely = true;
+                }
+            }
+            final boolean bms = likely;
+            handler.post(() -> listener.onDevice(device, finalName, rssi, bms));
         }
 
         @Override public void onScanFailed(int errorCode) {
             log("Scan error: " + errorCode);
-            status("Bluetooth scan failed (" + errorCode + "). Toggle Bluetooth and retry.", false);\n            handler.post(listener::onScanFinished);
+            status("Bluetooth scan failed (" + errorCode + "). Toggle Bluetooth and retry.", false);
+            handler.post(listener::onScanFinished);
         }
     };
 
