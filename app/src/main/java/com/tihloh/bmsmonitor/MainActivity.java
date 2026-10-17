@@ -53,6 +53,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ProgressBar progress;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
+    private boolean permissionForDirectConnect;
     private int visibleCount;
 
     @Override public void onCreate(Bundle saved) {
@@ -241,6 +242,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private void connectKnown() {
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+            permissionForDirectConnect = true;
             requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, PERMISSIONS);
             status.setText("Grant Nearby devices permission then tap Connect again.");
             return;
@@ -278,16 +280,19 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     private void beginScan() {
         if (Build.VERSION.SDK_INT >= 31) {
-            String[] ps = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT};
+            String[] ps = {Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.ACCESS_FINE_LOCATION};
             if (checkSelfPermission(ps[0]) != PackageManager.PERMISSION_GRANTED
                     || checkSelfPermission(ps[1]) != PackageManager.PERMISSION_GRANTED) {
-                status.setText("Android requires Nearby Devices permission before scanning.");
+                status.setText("Grant Bluetooth permissions to scan nearby devices.");
+                permissionForDirectConnect = false;
                 requestPermissions(ps, PERMISSIONS);
                 return;
             }
         } else {
             if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
                 status.setText("Grant Location permission to discover nearby BLE devices.");
+                permissionForDirectConnect = false;
                 requestPermissions(new String[]{Manifest.permission.ACCESS_FINE_LOCATION}, PERMISSIONS);
                 return;
             }
@@ -345,11 +350,18 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
         if (code == PERMISSIONS) {
-            boolean granted = results.length == permissions.length && results.length > 0;
-            for (int result : results) if (result != PackageManager.PERMISSION_GRANTED) granted = false;
-            if (granted) status.setText("Permission granted. Tap Connect or Scan again.");
-            else {
-                status.setText("Nearby Devices permission denied. Enable it in Android App Settings.");
+            boolean granted = Build.VERSION.SDK_INT < 31
+                    ? checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                    : checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED
+                      && (permissionForDirectConnect ||
+                          checkSelfPermission(Manifest.permission.BLUETOOTH_SCAN) == PackageManager.PERMISSION_GRANTED);
+            boolean direct = permissionForDirectConnect;
+            permissionForDirectConnect = false;
+            if (granted) {
+                if (direct) connectKnown();
+                else beginScan();
+            } else {
+                status.setText("Bluetooth permission denied. Enable Nearby devices in Android Settings.");
                 scanHint.setText("Settings → Apps → BMS Monitor → Permissions → Nearby devices.");
             }
         }
