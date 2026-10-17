@@ -242,7 +242,11 @@ public final class MainActivity extends Activity implements BleClient.Listener {
         }
         if (Build.VERSION.SDK_INT <= 30) {
             LocationManager manager = (LocationManager) getSystemService(Context.LOCATION_SERVICE);
-            if (manager != null && !manager.isLocationEnabled()) {
+            boolean enabled = manager == null || (Build.VERSION.SDK_INT >= 28
+                    ? manager.isLocationEnabled()
+                    : manager.isProviderEnabled(LocationManager.GPS_PROVIDER) ||
+                            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER));
+            if (!enabled) {
                 new AlertDialog.Builder(this).setTitle("Location services are off")
                         .setMessage("On this Android version, Bluetooth scanning requires Location services on, even though BMS Monitor does not collect your location.")
                         .setPositiveButton("Open settings", (d,w) ->
