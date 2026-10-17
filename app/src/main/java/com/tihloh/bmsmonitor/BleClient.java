@@ -13,6 +13,7 @@ import android.bluetooth.BluetoothProfile;
 import android.bluetooth.le.BluetoothLeScanner;
 import android.bluetooth.le.ScanCallback;
 import android.bluetooth.le.ScanResult;
+import android.bluetooth.le.ScanSettings;
 import android.content.Context;
 import android.os.Build;
 import android.os.Handler;
@@ -49,6 +50,8 @@ public final class BleClient {
     private BluetoothGattCharacteristic writer;
     private boolean ready;
     private int pollIndex;
+    private int discovered;
+    private boolean scanning;
 
     public BleClient(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -73,10 +76,14 @@ public final class BleClient {
         @Override public void onScanResult(int callbackType, ScanResult result) {
             String name = null;
             if (result.getScanRecord() != null) name = result.getScanRecord().getDeviceName();
-            if (name == null || name.isEmpty()) name = result.getDevice().getName();
+            if (name == null || name.isEmpty()) {
+                try { name = result.getDevice().getName(); }
+                catch (SecurityException ignored) { name = null; }
+            }
             final String finalName = name == null || name.isEmpty() ? "Unnamed BLE device" : name;
             final BluetoothDevice device = result.getDevice();
             final int rssi = result.getRssi();
+            discovered++;
             handler.post(() -> listener.onDevice(device, finalName, rssi));
         }
 
@@ -86,7 +93,11 @@ public final class BleClient {
         }
     };
 
-    private final Runnable stopScanTask = this::stopScan;
+    private final Runnable stopScanTask = () -> {
+        stopScan();
+        if (!ready) status(discovered == 0 ? "No BLE devices found. Check permissions, Location and distance." :
+            "Scan finished. Select your BMS from the list.", false);
+    };
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
@@ -107,6 +118,7 @@ public final class BleClient {
             return;
         }
         stopScan();
+        discovered = 0;
         scanner = adapter.getBluetoothLeScanner();
         if (scanner == null) {
             status("BLE scanner unavailable", false);
@@ -114,8 +126,12 @@ public final class BleClient {
         }
         status("Scanning for nearby BLE devices…", false);
         try {
-            scanner.startScan(scanCallback);
-            handler.postDelayed(stopScanTask, 12000);
+            ScanSettings settings = new ScanSettings.Builder()
+                    .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    .setReportDelay(0L).build();
+            scanner.startScan(null, settings, scanCallback);
+            scanning = true;
+            handler.postDelayed(stopScanTask, 20000);
         } catch (SecurityException | IllegalStateException e) {
             log("Scan start failed: " + e.getMessage());
             status("Cannot start Bluetooth scan", false);
@@ -124,6 +140,7 @@ public final class BleClient {
 
     public void stopScan() {
         handler.removeCallbacks(stopScanTask);
+        scanning = false;
         if (scanner != null) {
             try { scanner.stopScan(scanCallback); }
             catch (SecurityException | IllegalStateException ignored) { }
@@ -152,7 +169,7 @@ public final class BleClient {
             if (result == BluetoothGatt.GATT_SUCCESS && newState == BluetoothProfile.STATE_CONNECTED) {
                 log("Connected. Discovering GATT services.");
                 status("Discovering battery services…", false);
-                g.discoverServices();
+                if (!g.discoverServices()) status("Unable to discover GATT services", false);
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED || result != BluetoothGatt.GATT_SUCCESS) {
                 log("Disconnected (GATT status " + result + ")");
                 handler.post(() -> {
@@ -262,6 +279,8 @@ public final class BleClient {
     }
 
     public boolean isReady() { return ready; }
+    public boolean isScanning() { return scanning; }
+    public boolean hasBluetoothHardware() { return adapter != null; }
 
     public void refresh() {
         if (ready) request(0x21);

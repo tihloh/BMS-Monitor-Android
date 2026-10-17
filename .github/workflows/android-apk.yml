@@ -30,7 +30,22 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
+      - name: Restore stable APK signing key (optional for CI tests)
+        if: github.event_name != 'pull_request'
+        env:
+          BMS_KEYSTORE_BASE64: ${{ secrets.BMS_KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$BMS_KEYSTORE_BASE64" ]; then
+            echo "$BMS_KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/bms-signing.jks"
+            echo "BMS_SIGNING_STORE_FILE=$RUNNER_TEMP/bms-signing.jks" >> "$GITHUB_ENV"
+          else
+            echo "::warning::No stable APK keystore configured. Debug APKs from different runs cannot update each other."
+          fi
       - name: Test and build APK
+        env:
+          BMS_SIGNING_STORE_PASSWORD: ${{ secrets.BMS_SIGNING_STORE_PASSWORD }}
+          BMS_SIGNING_KEY_ALIAS: ${{ secrets.BMS_SIGNING_KEY_ALIAS }}
+          BMS_SIGNING_KEY_PASSWORD: ${{ secrets.BMS_SIGNING_KEY_PASSWORD }}
         run: gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug
       - name: Rename APK
         run: cp app/build/outputs/apk/debug/app-debug.apk BMS-Monitor-debug.apk
@@ -45,5 +60,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "Experimental APK (latest)" --notes "Automatically built debug APK for testing. Not a signed production release." --prerelease --target main
+          VERSION=$(sed -n "s/.*versionName '\\([^']*\\)'.*/\\1/p" app/build.gradle | head -n 1)
+          test -n "$VERSION"
+          NOTES="versionName: $VERSION
+
+Automatically built experimental Android APK. Android still requires installation confirmation.
+For in-place updates, configure stable APK signing secrets; otherwise older debug APKs must be uninstalled."
+          gh release view experimental-latest >/dev/null 2>&1 || gh release create experimental-latest --title "BMS Monitor v$VERSION (experimental)" --notes "$NOTES" --prerelease --target main
+          gh release edit experimental-latest --title "BMS Monitor v$VERSION (experimental)" --notes "$NOTES"
           gh release upload experimental-latest BMS-Monitor-debug.apk --clobber

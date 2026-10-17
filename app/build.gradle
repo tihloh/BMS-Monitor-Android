@@ -1,6 +1,11 @@
 plugins {
     id 'com.android.application'
 }
+def signingFile = System.getenv('BMS_SIGNING_STORE_FILE')
+def signingPassword = System.getenv('BMS_SIGNING_STORE_PASSWORD')
+def signingAlias = System.getenv('BMS_SIGNING_KEY_ALIAS')
+def signingKeyPassword = System.getenv('BMS_SIGNING_KEY_PASSWORD')
+def stableSigning = [signingFile, signingPassword, signingAlias, signingKeyPassword].every { it != null && !it.isEmpty() }
 android {
     namespace 'com.tihloh.bmsmonitor'
     compileSdk 35
@@ -9,8 +14,26 @@ android {
         applicationId 'com.tihloh.bmsmonitor'
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName '0.1.0'
+        versionCode 2
+        versionName '0.2.0'
+    }
+    buildFeatures {
+        buildConfig true
+    }
+    signingConfigs {
+        if (stableSigning) {
+            create('bmsStable') {
+                storeFile file(signingFile)
+                storePassword signingPassword
+                keyAlias signingAlias
+                keyPassword signingKeyPassword
+            }
+        }
+    }
+    buildTypes {
+        debug {
+            if (stableSigning) signingConfig signingConfigs.bmsStable
+        }
     }
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
