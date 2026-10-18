@@ -28,6 +28,8 @@ import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import android.widget.Switch;
+import android.app.NotificationManager;
 
 import java.text.SimpleDateFormat;
 import java.util.Date;
@@ -57,6 +59,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private Button scanButton, disconnectButton;
     private EditText manualMac;
     private ProgressBar progress;
+    private Switch notificationSwitch;
     private final StringBuilder logs = new StringBuilder();
     private boolean pendingAutoConnect = true;
     private boolean pendingDirectConnection;
@@ -230,17 +233,25 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         Button check = button("Check for updates", false);
         check.setOnClickListener(v -> updater.check(true));
         updatePanel.addView(check, below(0, 9));
-        if (Build.VERSION.SDK_INT >= 33) {
-            Button alerts = button("Enable update notifications", false);
-            alerts.setOnClickListener(v -> {
-                if (checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+        notificationSwitch = new Switch(this);
+        notificationSwitch.setTextSize(13);
+        updatePanel.addView(notificationSwitch, below(0, 8));
+        notificationSwitch.setOnCheckedChangeListener((buttonView, enabled) -> {
+            if (enabled) {
+                getSharedPreferences("bms_updates", MODE_PRIVATE).edit().putBoolean("notifications_enabled", true).apply();
+                if (Build.VERSION.SDK_INT >= 33 &&
+                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
                     requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 93);
-                } else {
-                    Toast.makeText(this, "Update notifications already enabled", Toast.LENGTH_SHORT).show();
+                } else if (!systemNotificationsAllowed()) {
+                    startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
                 }
-            });
-            updatePanel.addView(alerts, below(0, 6));
-        }
+            } else {
+                getSharedPreferences("bms_updates", MODE_PRIVATE).edit().putBoolean("notifications_enabled", false).apply();
+            }
+            refreshNotificationSwitch();
+        });
+        refreshNotificationSwitch();
         aboutView.addView(updatePanel, below(0, 10));
 
         logBox = panel();
@@ -269,6 +280,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout aboutCard = panel();
         aboutCard.addView(text(getString(R.string.app_name), 18, NAVY, true));
         aboutCard.addView(text("Version " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")", 13, MUTED, false), below(0, 5));
+        aboutCard.addView(text("Developer: Christian Bustamante", 13, NAVY, true), below(0, 6));
         aboutCard.addView(text("Read-only Bluetooth LE battery monitor. Updates use Android PackageInstaller; Android may require installation approval.", 12, MUTED, false), below(0, 8));
         Button source = button("GitHub releases", false);
         source.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
@@ -277,6 +289,35 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         aboutView.addView(aboutCard, below(0, 10));
         aboutView.addView(footer, below(0, 15));
         showPage(currentPage);
+    }
+
+    private boolean systemNotificationsAllowed() {
+        NotificationManager manager = (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        return manager != null && (Build.VERSION.SDK_INT < 24 || manager.areNotificationsEnabled());
+    }
+
+    private void refreshNotificationSwitch() {
+        if (notificationSwitch == null) return;
+        boolean preferred = getSharedPreferences("bms_updates", MODE_PRIVATE)
+                .getBoolean("notifications_enabled", true);
+        boolean allowed = (Build.VERSION.SDK_INT < 33 ||
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+                && systemNotificationsAllowed();
+        notificationSwitch.setOnCheckedChangeListener(null);
+        notificationSwitch.setChecked(preferred && allowed);
+        notificationSwitch.setText(preferred && allowed ? "Update notifications enabled" :
+                preferred ? "Update notifications blocked in Android settings" : "Update notifications disabled");
+        notificationSwitch.setOnCheckedChangeListener((view, checked) -> {
+            getSharedPreferences("bms_updates", MODE_PRIVATE).edit()
+                    .putBoolean("notifications_enabled", checked).apply();
+            if (checked && Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+                requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 93);
+            else if (checked && !systemNotificationsAllowed())
+                startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+                        .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
+            refreshNotificationSwitch();
+        });
     }
 
     private void showPage(int page) {
@@ -382,6 +423,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
         super.onRequestPermissionsResult(code, permissions, results);
+        if (code == 93) { refreshNotificationSwitch(); return; }
         if (code == PERMISSIONS && pendingDirectConnection) {
             if (Build.VERSION.SDK_INT < 31 ||
                     checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) == PackageManager.PERMISSION_GRANTED)
@@ -430,6 +472,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override protected void onResume() {
         super.onResume();
         if (updater != null) updater.onResume();
+        refreshNotificationSwitch();
     }
 
     @Override public void onStatus(String message, boolean connected) {
