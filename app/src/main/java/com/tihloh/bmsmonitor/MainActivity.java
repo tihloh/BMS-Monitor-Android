@@ -63,6 +63,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             cycleCount, manufactureDate, firmwareVersion, reportedCells, usageEstimate;
     private long lastDetailsReadingMs = -1;
     private String currentProtocol = "Not identified";
+    private String connectedDeviceLabel = "Unavailable";
     private long lastBasicReadingMs = -1;
     private long lastCellsReadingMs = -1;
     private long connectedSinceMs = -1;
@@ -595,12 +596,14 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             if (!message.startsWith("Scanning")) status.setText(message);
             if (wasConnected && !ready) {
                 currentProtocol = "Not identified";
+                connectedDeviceLabel = "Unavailable";
                 connectedSinceMs = -1;
                 resetReadings();
                 showPage(1);
             } else if (!wasConnected && ready) {
                 connectedSinceMs = SystemClock.elapsedRealtime();
                 resetReadings();
+                setDetail(deviceName, "Device", connectedDeviceLabel);
                 showPage(0);
                 updateLiveIndicator();
             } else {
@@ -620,8 +623,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             detailsAge.setText("Additional fields appear when the protocol provides them.");
             detailsAge.setTextColor(MUTED);
         }
-        setDetail(deviceName, "Device", "Unavailable");
+        setDetail(deviceName, "Device", connectedDeviceLabel);
         setDetail(protectionStatus, "Active protections", "Unavailable");
+        if (protectionStatus != null) protectionStatus.setTextColor(NAVY);
         setDetail(mosCharge, "Charge MOSFET", "Unavailable");
         setDetail(mosDischarge, "Discharge MOSFET", "Unavailable");
         setDetail(balancingStatus, "Balancing", "Unavailable");
@@ -744,7 +748,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onDeviceIdentity(String name) {
         runOnUiThread(() -> {
-            if (bmsConnected) setDetail(deviceName, "Device", name);
+            if (name == null || name.trim().isEmpty()) return;
+            connectedDeviceLabel = name.trim();
+            if (bmsConnected) setDetail(deviceName, "Device", connectedDeviceLabel);
         });
     }
 
