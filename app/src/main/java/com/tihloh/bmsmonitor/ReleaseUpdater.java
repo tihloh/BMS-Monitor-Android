@@ -329,7 +329,11 @@ public final class ReleaseUpdater {
                     + ". Development APKs cannot upgrade the production app.");
         }
         PackageInfo installed = pm.getPackageInfo(activity.getPackageName(), flags);
-        if (candidate.getLongVersionCode() <= installed.getLongVersionCode())
+        long candidateCode = Build.VERSION.SDK_INT >= 28
+                ? candidate.getLongVersionCode() : candidate.versionCode;
+        long installedCode = Build.VERSION.SDK_INT >= 28
+                ? installed.getLongVersionCode() : installed.versionCode;
+        if (candidateCode <= installedCode)
             throw new IOException("APK versionCode is not newer than installed version");
         Signature[] current = signatures(installed);
         Signature[] incoming = signatures(candidate);
