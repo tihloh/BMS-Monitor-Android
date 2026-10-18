@@ -21,6 +21,29 @@ public class BatteryProtocolTest {
         assertEquals(100, info.totalAh, 0.001);
     }
 
+    @Test public void capturedGentaiExtendedFrameShowsOnlyProvisionalMeasurements() {
+        byte[] frame = fromHex("AA211A8665000082FBFFFF1364184C0000A0860100BF001E19191A1F1A0508");
+        BatteryProtocol.GentaiDetails extra = BatteryProtocol.parseGentaiDetails(frame);
+        assertNotNull(extra);
+        assertEquals(191, extra.possibleCycleCount);
+        assertEquals(100, extra.possibleHealthPercent);
+        assertArrayEquals(new double[]{30, 25, 25, 26, 31, 26},
+                extra.possibleTemperaturesC, 0.001);
+    }
+
+    @Test public void rejectsUnknownGentaiLayoutWithoutGuessingExtendedFields() {
+        byte[] original = fromHex("AA211A8665000082FBFFFF1364184C0000A0860100BF001E19191A1F1A0508");
+        byte[] truncated = new byte[original.length - 2];
+        System.arraycopy(original, 0, truncated, 0, 29);
+        truncated[2] = 24; // different payload format, not supported by this decoder
+        assertNull(BatteryProtocol.parseGentaiDetails(truncated));
+        byte[] absentSensor = java.util.Arrays.copyOf(original, original.length);
+        absentSensor[23] = (byte) 0xFF;
+        BatteryProtocol.GentaiDetails details = BatteryProtocol.parseGentaiDetails(absentSensor);
+        assertNotNull(details);
+        assertTrue(Double.isNaN(details.possibleTemperaturesC[0]));
+    }
+
     @Test public void permitsOnlyReadTelemetry() {
         assertEquals("AA21002100", BatteryProtocol.hex(BatteryProtocol.request(0x21)));
         assertEquals("AA22002200", BatteryProtocol.hex(BatteryProtocol.request(0x22)));
