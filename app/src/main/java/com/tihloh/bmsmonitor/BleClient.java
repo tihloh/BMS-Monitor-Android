@@ -293,6 +293,13 @@ public final class BleClient {
         status("Connecting to " + device.getAddress() + "…", false);
         log("Connecting to " + device.getAddress());
         try {
+            String name = device.getName();
+            if (name != null && !name.trim().isEmpty())
+                listener.onDeviceIdentity(name);
+        } catch (SecurityException ignored) {
+            // Some devices expose a name only through the JBD read-only 05 register.
+        }
+        try {
             gatt = device.connectGatt(context, false, callback, BluetoothDevice.TRANSPORT_LE);
             if (gatt == null) status("Bluetooth connection could not start", false);
             else handler.postDelayed(connectionTimeout, 20000);
