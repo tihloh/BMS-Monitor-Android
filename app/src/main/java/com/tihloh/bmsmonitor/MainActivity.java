@@ -19,6 +19,9 @@ import android.location.LocationManager;
 import android.provider.Settings;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
+import android.os.SystemClock;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -54,6 +57,18 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private int currentPage = 1;
     /** The dashboard is available only after a BMS GATT connection is ready. */
     private boolean bmsConnected = false;
+    private TextView liveIndicator, cellFreshness;
+    private long lastBasicReadingMs = -1;
+    private long lastCellsReadingMs = -1;
+    private long connectedSinceMs = -1;
+    private String telemetryCondition = "Waiting for battery data";
+    private final Handler freshnessHandler = new Handler(Looper.getMainLooper());
+    private final Runnable freshnessTicker = new Runnable() {
+        @Override public void run() {
+            updateLiveIndicator();
+            freshnessHandler.postDelayed(this, 1000);
+        }
+    };
     private TextView connection, scanHint, firmwareHint, soc, status, voltage, current, power,
             remaining, capacity, updated, cellHeading, logText, totalFound;
     private Button scanButton, disconnectButton;
@@ -194,7 +209,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionView.addView(scanCard, below(0, 10));
 
         LinearLayout socPanel = panel();
-        socPanel.addView(text("STATE OF CHARGE", 11, MUTED, true));
+        LinearLayout liveHeader = horizontal();
+        liveHeader.addView(text("STATE OF CHARGE", 11, MUTED, true),
+                new LinearLayout.LayoutParams(0, -2, 1));
+        liveIndicator = text("WAITING FOR DATA", 11, MUTED, true);
+        liveIndicator.setGravity(Gravity.END);
+        liveHeader.addView(liveIndicator);
+        socPanel.addView(liveHeader);
         soc = text("-- %", 44, CYAN, true);
         socPanel.addView(soc, below(0, 5));
         updated = text("No readings received yet", 12, MUTED, false);
@@ -221,6 +242,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout cells = panel();
         cellHeading = text("Individual cell voltages", 15, NAVY, true);
         cells.addView(cellHeading);
+        cellFreshness = text("No cell readings yet", 11, MUTED, false);
+        cells.addView(cellFreshness, below(0, 3));
         cellList = vertical();
         cellList.addView(text("Awaiting a supported response from the BMS.", 12, MUTED, false));
         cells.addView(cellList, below(0, 9));
@@ -457,6 +480,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override protected void onResume() {
         super.onResume();
+        freshnessHandler.removeCallbacks(freshnessTicker);
+        freshnessHandler.post(freshnessTicker);
         if (updater != null) updater.onResume();
         refreshNotificationSwitch();
         String lastError = getSharedPreferences("bms_updates", MODE_PRIVATE)
@@ -472,6 +497,47 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         }
     }
 
+    @Override protected void onPause() {
+        freshnessHandler.removeCallbacks(freshnessTicker);
+        super.onPause();
+    }
+
+    private static String ageLabel(long elapsed) {
+        if (elapsed < 1000) return "just now";
+        long seconds = elapsed / 1000;
+        return seconds < 60 ? seconds + "s ago" : (seconds / 60) + "m ago";
+    }
+
+    /** A BLE link is not the same thing as receiving live telemetry packets. */
+    private void updateLiveIndicator() {
+        if (liveIndicator == null || !bmsConnected) return;
+        long now = SystemClock.elapsedRealtime();
+        if (lastBasicReadingMs < 0) {
+            long wait = connectedSinceMs > 0 ? now - connectedSinceMs : 0;
+            boolean delayed = wait >= 12000;
+            liveIndicator.setText(delayed ? "NO TELEMETRY" : "WAITING FOR DATA");
+            liveIndicator.setTextColor(delayed ? Color.rgb(174, 98, 0) : MUTED);
+            updated.setText(delayed ? "Connected, but no valid battery readings yet" :
+                    "Waiting for the first BMS response…");
+        } else {
+            long age = Math.max(0, now - lastBasicReadingMs);
+            boolean live = age < 8000;
+            liveIndicator.setText(live ? "● LIVE" : "● STALE");
+            liveIndicator.setTextColor(live ? CYAN : Color.rgb(174, 98, 0));
+            updated.setText((live ? telemetryCondition : "Readings are not updating") +
+                    "  •  " + ageLabel(age));
+        }
+        if (cellFreshness != null) {
+            if (lastCellsReadingMs < 0) cellFreshness.setText("Awaiting cell telemetry");
+            else {
+                long age = Math.max(0, now - lastCellsReadingMs);
+                cellFreshness.setText((age < 20000 ? "Cells updated " : "Cell data stale · ") +
+                        ageLabel(age));
+                cellFreshness.setTextColor(age < 20000 ? MUTED : Color.rgb(174, 98, 0));
+            }
+        }
+    }
+
     @Override public void onStatus(String message, boolean connected) {
         runOnUiThread(() -> {
             if (connection == null) return;
@@ -483,10 +549,14 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             connection.setTextColor(ready ? CYAN : NAVY);
             if (!message.startsWith("Scanning")) status.setText(message);
             if (wasConnected && !ready) {
+                connectedSinceMs = -1;
                 resetReadings();
                 showPage(1);
             } else if (!wasConnected && ready) {
+                connectedSinceMs = SystemClock.elapsedRealtime();
+                resetReadings();
                 showPage(0);
+                updateLiveIndicator();
             } else {
                 dashboardTab.setVisibility(ready ? View.VISIBLE : View.GONE);
                 if (!ready && currentPage == 0) showPage(1);
@@ -496,6 +566,17 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     /** Prevent readings from a previously disconnected pack appearing as live data. */
     private void resetReadings() {
+        lastBasicReadingMs = -1;
+        lastCellsReadingMs = -1;
+        telemetryCondition = "Waiting for battery data";
+        if (liveIndicator != null) {
+            liveIndicator.setText("WAITING FOR DATA");
+            liveIndicator.setTextColor(MUTED);
+        }
+        if (cellFreshness != null) {
+            cellFreshness.setText("No cell readings yet");
+            cellFreshness.setTextColor(MUTED);
+        }
         soc.setText("-- %");
         voltage.setText("-- V");
         current.setText("-- A");
@@ -567,28 +648,32 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override public void onInfo(BatteryProtocol.BatteryInfo b) {
         runOnUiThread(() -> {
             if (!bmsConnected) return;
+            lastBasicReadingMs = SystemClock.elapsedRealtime();
             soc.setText(String.format(Locale.US, "%.0f %%", b.socPercent));
             voltage.setText(String.format(Locale.US, "%.2f V", b.voltageV));
             current.setText(String.format(Locale.US, "%+.2f A", b.currentA));
             power.setText(String.format(Locale.US, "%+.1f W", b.powerW));
             remaining.setText(String.format(Locale.US, "%.2f Ah", b.remainingAh));
             capacity.setText(String.format(Locale.US, "Rated capacity: %.1f Ah", b.totalAh));
-            String condition = b.currentA < -0.03 ? "Discharging" : b.currentA > 0.03 ? "Charging" : "Idle";
-            updated.setText(condition + "  •  Updated " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()));
+            telemetryCondition = b.currentA < -0.03 ? "Discharging" : b.currentA > 0.03 ? "Charging" : "Idle";
+            updateLiveIndicator();
         });
     }
 
     @Override public void onBatteryLevel(int percent) {
         runOnUiThread(() -> {
             if (!bmsConnected) return;
+            lastBasicReadingMs = SystemClock.elapsedRealtime();
             soc.setText(percent + " %");
-            updated.setText("Standard Bluetooth Battery Service · SOC only");
+            telemetryCondition = "BLE Battery Service · level only";
+            updateLiveIndicator();
         });
     }
 
     @Override public void onCells(double[] cells) {
         runOnUiThread(() -> {
             if (!bmsConnected) return;
+            lastCellsReadingMs = SystemClock.elapsedRealtime();
             cellList.removeAllViews();
             double min = Double.MAX_VALUE, max = 0;
             for (double v : cells) { min = Math.min(min, v); max = Math.max(max, v); }
@@ -605,6 +690,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 }
                 cellList.addView(row);
             }
+            updateLiveIndicator();
         });
     }
 
@@ -687,6 +773,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     }
     private int dp(float n) { return (int) (getResources().getDisplayMetrics().density * n + .5f); }
     @Override protected void onDestroy() {
+        freshnessHandler.removeCallbacks(freshnessTicker);
         if (ble != null) ble.close();
         super.onDestroy();
     }
