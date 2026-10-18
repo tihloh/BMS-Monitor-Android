@@ -123,7 +123,7 @@ public final class ReleaseUpdater {
                     }
                 }
             }
-            if (assetUrl.isEmpty()) continue;
+            if (assetUrl.isEmpty() || assetUrl.toLowerCase(Locale.US).contains("debug")) continue;
             Release r = new Release(version, release.optString("body", ""), assetUrl,
                     release.optString("html_url", ""));
             if (latest == null || compareVersion(r.version, latest.version) > 0) latest = r;
@@ -197,6 +197,15 @@ public final class ReleaseUpdater {
             return;
         }
         pendingPermission = null;
+        if (BuildConfig.DEBUG) {
+            callback.onMessage("Experimental APK cannot upgrade to a differently signed production APK. One-time reinstall required.");
+            new AlertDialog.Builder(activity).setTitle("Production installation")
+                    .setMessage("Your current experimental APK may have a different signing key. Android cannot replace it with a production APK. Save any data you need, uninstall the experimental app and install the production release once. Future releases will use the permanent signing key.")
+                    .setPositiveButton("View releases", (dialog, which) -> activity.startActivity(
+                            new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/" + REPO + "/releases"))))
+                    .setNegativeButton("Cancel", null).show();
+            return;
+        }
         if (busy) return;
         busy = true;
         callback.onMessage("Preparing update " + release.version + " internally…");
