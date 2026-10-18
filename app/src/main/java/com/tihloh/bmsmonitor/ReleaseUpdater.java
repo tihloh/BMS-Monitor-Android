@@ -63,6 +63,10 @@ public final class ReleaseUpdater {
         long now = System.currentTimeMillis();
         long last = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getLong(LAST_CHECK, 0);
+        if (BuildConfig.DEBUG) {
+            callback.onMessage("Development build — production updates are disabled.");
+            return;
+        }
         if (!force && now - last < CHECK_INTERVAL_MS) return;
         if (busy) return;
         busy = true;
@@ -105,7 +109,7 @@ public final class ReleaseUpdater {
         Release latest = null;
         for (int i = 0; i < releases.length(); i++) {
             JSONObject release = releases.optJSONObject(i);
-            if (release == null || release.optBoolean("draft")) continue;
+            if (release == null || release.optBoolean("draft") || release.optBoolean("prerelease")) continue;
             // Experimental debug APKs are published as versioned prereleases.
             // Production signed installations only consider stable releases.
             if (release.optBoolean("prerelease") && !BuildConfig.DEBUG) continue;
