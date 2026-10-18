@@ -532,7 +532,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             item.addView(connect, new LinearLayout.LayoutParams(dp(98), dp(45)));
             if (likelyBms) deviceList.addView(item, 0, below(0, 6));
             else deviceList.addView(item, below(0, 6));
-            if (likelyBms) scanHint.setText("Likely Gentai BMS found. Tap Connect beside the device.");
+            if (likelyBms) scanHint.setText("Possible BMS found. Tap Connect; the app will detect its telemetry protocol.");
         });
     }
 
