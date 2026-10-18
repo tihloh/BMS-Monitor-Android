@@ -145,13 +145,18 @@ public final class JbdProtocol {
         if (!valid(frame, 0x05)) return null;
         int len = frame[3] & 0xff;
         if (len < 2) return null;
-        int stringLength = frame[4] & 0xff;
-        if (stringLength < 1 || stringLength > len - 1 || stringLength > 48) return null;
-        for (int i = 5; i < 5 + stringLength; i++) {
-            int b = frame[i] & 0xff;
-            if (b < 32 || b > 126) return null;
+        // Common response formats are either length-prefixed or plain ASCII.
+        int leading = frame[4] & 0xff;
+        int offset = leading >= 1 && leading == len - 1 ? 5 : 4;
+        int stringLength = offset == 5 ? leading : len;
+        if (stringLength < 1 || stringLength > 48) return null;
+        for (int i = offset; i < offset + stringLength; i++) {
+            int value = frame[i] & 0xff;
+            if (value < 32 || value > 126) return null;
         }
-        return new String(frame, 5, stringLength, java.nio.charset.StandardCharsets.US_ASCII).trim();
+        String name = new String(frame, offset, stringLength,
+                java.nio.charset.StandardCharsets.US_ASCII).trim();
+        return name.isEmpty() ? null : name;
     }
 
     /** 04: each adjacent big-endian pair encodes cell voltage in millivolts. */
