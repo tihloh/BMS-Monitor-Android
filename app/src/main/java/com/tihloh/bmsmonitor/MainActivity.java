@@ -49,7 +49,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ScrollView mainScroll;
     private LinearLayout dashboardView, connectionView, aboutView;
     private Button dashboardTab, connectionTab, aboutTab;
-    private int currentPage = 0;
+    private int currentPage = 1;
+    /** The dashboard is available only after a BMS GATT connection is ready. */
+    private boolean bmsConnected = false;
     private TextView connection, scanHint, firmwareHint, soc, status, voltage, current, power,
             remaining, capacity, updated, cellHeading, logText, totalFound;
     private Button scanButton, disconnectButton;
@@ -122,9 +124,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         version.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         topLine.addView(version);
         connectionCard.addView(topLine);
-        status = text("Choose a Bluetooth device in Connections.", 13, MUTED, false);
+        status = text("Connect to a Bluetooth battery to view live readings.", 13, MUTED, false);
         connectionCard.addView(status, below(0, 5));
-        dashboardView.addView(connectionCard, below(0, 15));
+        connectionView.addView(connectionCard, below(0, 12));
 
         Button gentaiConnect = button("Connect to saved BLE address", true);
         gentaiConnect.setTextSize(15);
@@ -278,8 +280,11 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     }
 
     private void showPage(int page) {
+        // Neither the dashboard tab nor its data is visible while disconnected.
+        if (page == 0 && !bmsConnected) page = 1;
         currentPage = page;
-        dashboardView.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
+        dashboardTab.setVisibility(bmsConnected ? View.VISIBLE : View.GONE);
+        dashboardView.setVisibility(bmsConnected && page == 0 ? View.VISIBLE : View.GONE);
         connectionView.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
         aboutView.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
         Button[] tabs = {dashboardTab, connectionTab, aboutTab};
@@ -430,10 +435,37 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override public void onStatus(String message, boolean connected) {
         runOnUiThread(() -> {
             if (connection == null) return;
-            connection.setText(connected ? "●  Connected to BMS" : "○  " + message);
-            connection.setTextColor(connected ? CYAN : NAVY);
+            // A scan status is not proof of disconnection if a BMS is still ready.
+            boolean ready = connected || (ble != null && ble.isReady());
+            boolean wasConnected = bmsConnected;
+            bmsConnected = ready;
+            connection.setText(ready ? "●  Connected to BMS" : "○  " + message);
+            connection.setTextColor(ready ? CYAN : NAVY);
             if (!message.startsWith("Scanning")) status.setText(message);
+            if (wasConnected && !ready) {
+                resetReadings();
+                showPage(1);
+            } else if (!wasConnected && ready) {
+                showPage(0);
+            } else {
+                dashboardTab.setVisibility(ready ? View.VISIBLE : View.GONE);
+                if (!ready && currentPage == 0) showPage(1);
+            }
         });
+    }
+
+    /** Prevent readings from a previously disconnected pack appearing as live data. */
+    private void resetReadings() {
+        soc.setText("-- %");
+        voltage.setText("-- V");
+        current.setText("-- A");
+        power.setText("-- W");
+        remaining.setText("-- Ah");
+        capacity.setText("Rated capacity: -- Ah");
+        updated.setText("Waiting for battery data");
+        cellHeading.setText("Individual cell voltages");
+        cellList.removeAllViews();
+        cellList.addView(text("Awaiting a supported response from the BMS.", 12, MUTED, false));
     }
 
     @SuppressLint("MissingPermission")
@@ -494,6 +526,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onInfo(BatteryProtocol.BatteryInfo b) {
         runOnUiThread(() -> {
+            if (!bmsConnected) return;
             soc.setText(String.format(Locale.US, "%.0f %%", b.socPercent));
             voltage.setText(String.format(Locale.US, "%.2f V", b.voltageV));
             current.setText(String.format(Locale.US, "%+.2f A", b.currentA));
@@ -507,6 +540,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onBatteryLevel(int percent) {
         runOnUiThread(() -> {
+            if (!bmsConnected) return;
             soc.setText(percent + " %");
             updated.setText("Standard Bluetooth Battery Service · SOC only");
         });
@@ -514,6 +548,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onCells(double[] cells) {
         runOnUiThread(() -> {
+            if (!bmsConnected) return;
             cellList.removeAllViews();
             double min = Double.MAX_VALUE, max = 0;
             for (double v : cells) { min = Math.min(min, v); max = Math.max(max, v); }
