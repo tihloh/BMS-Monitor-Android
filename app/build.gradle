@@ -26,11 +26,6 @@ android {
     }
 
     buildTypes {
-        debug {
-            // One package ID across all variants. Use the permanent key when supplied,
-            // otherwise Gradle's local debug key is only suitable for local test builds.
-            if (project.hasProperty('SIGNING_STORE_FILE')) signingConfig signingConfigs.stable
-        }
         release {
             minifyEnabled false
             if (project.hasProperty('SIGNING_STORE_FILE')) signingConfig signingConfigs.stable
