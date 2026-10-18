@@ -7,6 +7,9 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
 import android.content.pm.PackageInstaller.SessionInfo;
+import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
+import android.content.pm.Signature;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -17,11 +20,17 @@ import android.widget.Toast;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.Arrays;
 import java.util.Locale;
+import java.util.zip.ZipFile;
 
 /**
  * Update flow based on tihloh/pos-source: GitHub release check and
@@ -64,7 +73,7 @@ public final class ReleaseUpdater {
         long last = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getLong(LAST_CHECK, 0);
         if (BuildConfig.DEBUG) {
-            callback.onMessage("Development build — production updates are disabled.");
+            callback.onMessage("Development build: in-app production updates are unavailable. New dev APKs require separate installation; see GitHub Releases.");
             return;
         }
         if (!force && now - last < CHECK_INTERVAL_MS) return;
@@ -79,7 +88,7 @@ public final class ReleaseUpdater {
                 main.post(() -> {
                     busy = false;
                     if (newest == null) {
-                        callback.onMessage("No compatible versioned APK yet. Experimental and signed release channels are separate.");
+                        callback.onMessage("No compatible production update available. Development APKs cannot replace production installations.");
                         return;
                     }
                     int diff = compareVersion(newest.version, BuildConfig.VERSION_NAME);
@@ -102,17 +111,15 @@ public final class ReleaseUpdater {
     }
 
     private static Release latestRelease() throws Exception {
-        // The releases/latest API excludes GitHub pre-releases; for this
-        // experimental monitor, select the newest semver from the releases list.
+        // Stable production releases only. Dev/debug APKs have a different package
+        // ID and are never valid in-place replacements for this application.
         String body = getText("https://api.github.com/repos/" + REPO + "/releases?per_page=15");
         JSONArray releases = new JSONArray(body);
         Release latest = null;
         for (int i = 0; i < releases.length(); i++) {
             JSONObject release = releases.optJSONObject(i);
             if (release == null || release.optBoolean("draft") || release.optBoolean("prerelease")) continue;
-            // Experimental debug APKs are published as versioned prereleases.
-            // Production signed installations only consider stable releases.
-            if (release.optBoolean("prerelease") && !BuildConfig.DEBUG) continue;
+
             String tag = release.optString("tag_name", "");
             if (!tag.matches("v?\\d+\\.\\d+\\.\\d+")) continue;
             String version = tag.startsWith("v") ? tag.substring(1) : tag;
@@ -121,13 +128,14 @@ public final class ReleaseUpdater {
             if (assets != null) {
                 for (int k = 0; k < assets.length(); k++) {
                     JSONObject asset = assets.optJSONObject(k);
-                    if (asset != null && asset.optString("name", "").endsWith(".apk")) {
+                    if (asset != null && asset.optString("name", "")
+                            .matches("Battery-Monitor-v?" + java.util.regex.Pattern.quote(version) + "\\.apk")) {
                         assetUrl = asset.optString("browser_download_url", "");
                         break;
                     }
                 }
             }
-            if (assetUrl.isEmpty() || assetUrl.toLowerCase(Locale.US).contains("debug")) continue;
+            if (assetUrl.isEmpty()) continue;
             Release r = new Release(version, release.optString("body", ""), assetUrl,
                     release.optString("html_url", ""));
             if (latest == null || compareVersion(r.version, latest.version) > 0) latest = r;
@@ -229,6 +237,7 @@ public final class ReleaseUpdater {
         PackageInstaller installer = activity.getPackageManager().getPackageInstaller();
         Integer sessionId = null;
         HttpURLConnection conn = null;
+        File pendingApk = null;
         try {
             URL uri = new URL(release.apkUrl);
             if (!"https".equalsIgnoreCase(uri.getProtocol()) ||
@@ -242,6 +251,27 @@ public final class ReleaseUpdater {
             conn.setRequestProperty("User-Agent", "BMSMonitor-Android");
             int status = conn.getResponseCode();
             if (status < 200 || status >= 300) throw new IllegalStateException("Download HTTP " + status);
+            pendingApk = File.createTempFile("bms-update-", ".apk", activity.getCacheDir());
+            long actualSize = 0;
+            long advertisedSize = conn.getContentLengthLong();
+            if (advertisedSize > 100L * 1024 * 1024)
+                throw new IOException("Update file is unexpectedly large");
+            try (InputStream input = conn.getInputStream();
+                 FileOutputStream output = new FileOutputStream(pendingApk)) {
+                byte[] bytes = new byte[16384];
+                int n;
+                while ((n = input.read(bytes)) != -1) {
+                    actualSize += n;
+                    if (actualSize > 100L * 1024 * 1024)
+                        throw new IOException("Update exceeds maximum allowed size");
+                    output.write(bytes, 0, n);
+                }
+                output.getFD().sync();
+            }
+            if (advertisedSize > 0 && actualSize != advertisedSize)
+                throw new IOException("Incomplete APK download: expected " + advertisedSize + " bytes, got " + actualSize);
+            validateApk(pendingApk);
+
             PackageInstaller.SessionParams params = new PackageInstaller.SessionParams(
                     PackageInstaller.SessionParams.MODE_FULL_INSTALL);
             params.setAppPackageName(activity.getPackageName());
@@ -249,15 +279,13 @@ public final class ReleaseUpdater {
                 params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED);
             }
             sessionId = installer.createSession(params);
-            try (PackageInstaller.Session session = installer.openSession(sessionId)) {
-                long length = conn.getContentLengthLong();
-                try (InputStream input = conn.getInputStream();
-                     OutputStream output = session.openWrite("base.apk", 0, length > 0 ? length : -1)) {
-                    byte[] buffer = new byte[16384];
-                    int read;
-                    while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
-                    session.fsync(output);
-                }
+            try (PackageInstaller.Session session = installer.openSession(sessionId);
+                 FileInputStream input = new FileInputStream(pendingApk);
+                 OutputStream output = session.openWrite("base.apk", 0, actualSize)) {
+                byte[] buffer = new byte[16384];
+                int read;
+                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+                session.fsync(output);
                 Intent callbackIntent = new Intent(activity, UpdateInstallReceiver.class);
                 callbackIntent.setAction(UpdateInstallReceiver.ACTION_INSTALL_STATUS);
                 PendingIntent pending = PendingIntent.getBroadcast(activity,
@@ -277,7 +305,41 @@ public final class ReleaseUpdater {
             });
         } finally {
             if (conn != null) conn.disconnect();
+            if (pendingApk != null && pendingApk.exists() && !pendingApk.delete())
+                android.util.Log.w("BMS-Updater", "Could not clean cached APK: " + pendingApk.getName());
             busy = false;
         }
     }
+    /** Reject corrupt or incompatible APKs before committing an Android installer session. */
+    private void validateApk(File apk) throws Exception {
+        try (ZipFile zip = new ZipFile(apk)) {
+            if (zip.getEntry("AndroidManifest.xml") == null)
+                throw new IOException("Downloaded file is not a valid Android APK");
+        }
+        PackageManager pm = activity.getPackageManager();
+        int flags = Build.VERSION.SDK_INT >= 28
+                ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
+        PackageInfo candidate = pm.getPackageArchiveInfo(apk.getAbsolutePath(), flags);
+        if (candidate == null || !activity.getPackageName().equals(candidate.packageName)) {
+            String actual = candidate == null ? "unrecognized APK" : candidate.packageName;
+            throw new IOException("Incorrect APK package: " + actual
+                    + ". Expected " + activity.getPackageName()
+                    + ". Development APKs cannot upgrade the production app.");
+        }
+        PackageInfo installed = pm.getPackageInfo(activity.getPackageName(), flags);
+        if (candidate.getLongVersionCode() <= installed.getLongVersionCode())
+            throw new IOException("APK versionCode is not newer than installed version");
+        Signature[] current = signatures(installed);
+        Signature[] incoming = signatures(candidate);
+        if (current != null && incoming != null && current.length > 0 &&
+                incoming.length > 0 && !Arrays.equals(current, incoming))
+            throw new IOException("APK signing certificate differs from the installed app. A one-time reinstall is required.");
+    }
+
+    private static Signature[] signatures(PackageInfo info) {
+        if (Build.VERSION.SDK_INT >= 28)
+            return info.signingInfo == null ? null : info.signingInfo.getApkContentsSigners();
+        return info.signatures;
+    }
+
 }
