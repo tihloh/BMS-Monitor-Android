@@ -236,21 +236,6 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         notificationSwitch = new Switch(this);
         notificationSwitch.setTextSize(13);
         updatePanel.addView(notificationSwitch, below(0, 8));
-        notificationSwitch.setOnCheckedChangeListener((buttonView, enabled) -> {
-            if (enabled) {
-                getSharedPreferences("bms_updates", MODE_PRIVATE).edit().putBoolean("notifications_enabled", true).apply();
-                if (Build.VERSION.SDK_INT >= 33 &&
-                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                    requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, 93);
-                } else if (!systemNotificationsAllowed()) {
-                    startActivity(new Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                            .putExtra(Settings.EXTRA_APP_PACKAGE, getPackageName()));
-                }
-            } else {
-                getSharedPreferences("bms_updates", MODE_PRIVATE).edit().putBoolean("notifications_enabled", false).apply();
-            }
-            refreshNotificationSwitch();
-        });
         refreshNotificationSwitch();
         aboutView.addView(updatePanel, below(0, 10));
 
