@@ -118,7 +118,7 @@ public final class UpdateJobService extends JobService {
         if (notifications == null) return;
         if (Build.VERSION.SDK_INT >= 26) {
             notifications.createNotificationChannel(new NotificationChannel(CHANNEL,
-                    "BMS Monitor updates", NotificationManager.IMPORTANCE_DEFAULT));
+                    "Battery Monitor updates", NotificationManager.IMPORTANCE_DEFAULT));
         }
         Intent open = new Intent(this, MainActivity.class);
         open.putExtra("check_updates_now", true);
@@ -127,7 +127,7 @@ public final class UpdateJobService extends JobService {
                 PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
         Notification notification = new Notification.Builder(this, CHANNEL)
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
-                .setContentTitle("BMS Monitor " + version + " available")
+                .setContentTitle("Battery Monitor " + version + " available")
                 .setContentText("Tap to review and install the new version")
                 .setContentIntent(click)
                 .setAutoCancel(true)

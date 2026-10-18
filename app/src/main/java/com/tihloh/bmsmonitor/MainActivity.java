@@ -84,7 +84,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scroll.addView(root);
         setContentView(scroll);
 
-        TextView title = text("BMS Monitor", 25, NAVY, true);
+        TextView title = text(getString(R.string.app_name), 25, NAVY, true);
         root.addView(title);
         TextView subtitle = text("GENTAI  /  LIVE BATTERY TELEMETRY", 11, CYAN, true);
         subtitle.setLetterSpacing(0.06f);

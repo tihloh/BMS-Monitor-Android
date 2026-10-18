@@ -2,6 +2,11 @@
 
 Experimental **read-only** Gentai/ECO-style Bluetooth battery monitor for Android 8.0 and later.
 
+## Version 0.3.4
+- Proper adaptive launcher icon (battery + charging bolt) with round and themed monochrome variants.
+- Android app label and dashboard title: **Battery Monitor**.
+- Launcher resources are native vector XML, so Android generates sharp icons at all display sizes.
+
 ## Version 0.3.3
 - Fixed update detection: GitHub Actions now publishes a semver-tagged experimental pre-release for each new version, allowing older apps to discover an update.
 - Debug builds check versioned experimental prereleases; signed builds only check stable signed releases.
