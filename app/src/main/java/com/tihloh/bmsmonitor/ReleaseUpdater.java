@@ -279,13 +279,15 @@ public final class ReleaseUpdater {
                 params.setRequireUserAction(PackageInstaller.SessionParams.USER_ACTION_REQUIRED);
             }
             sessionId = installer.createSession(params);
-            try (PackageInstaller.Session session = installer.openSession(sessionId);
-                 FileInputStream input = new FileInputStream(pendingApk);
-                 OutputStream output = session.openWrite("base.apk", 0, actualSize)) {
-                byte[] buffer = new byte[16384];
-                int read;
-                while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
-                session.fsync(output);
+            try (PackageInstaller.Session session = installer.openSession(sessionId)) {
+                try (FileInputStream input = new FileInputStream(pendingApk);
+                     OutputStream output = session.openWrite("base.apk", 0, actualSize)) {
+                    byte[] buffer = new byte[16384];
+                    int read;
+                    while ((read = input.read(buffer)) != -1) output.write(buffer, 0, read);
+                    session.fsync(output);
+                }
+                // All session output streams MUST close before committing.
                 Intent callbackIntent = new Intent(activity, UpdateInstallReceiver.class);
                 callbackIntent.setAction(UpdateInstallReceiver.ACTION_INSTALL_STATUS);
                 PendingIntent pending = PendingIntent.getBroadcast(activity,
