@@ -26,6 +26,10 @@ android {
     }
 
     buildTypes {
+        debug {
+            applicationIdSuffix '.debug'
+            versionNameSuffix '-debug'
+        }
         release {
             minifyEnabled false
             if (project.hasProperty('SIGNING_STORE_FILE')) signingConfig signingConfigs.stable
