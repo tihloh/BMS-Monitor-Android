@@ -111,6 +111,7 @@ public final class UpdateJobService extends JobService {
     }
 
     private void notifyUser(String version) {
+        if (!getSharedPreferences("bms_updates", MODE_PRIVATE).getBoolean("notifications_enabled", true)) return;
         if (Build.VERSION.SDK_INT >= 33 &&
                 checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
             return;
