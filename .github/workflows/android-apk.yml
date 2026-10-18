@@ -1,4 +1,4 @@
-name: Build and Release Android APK
+name: Build and Release Battery Monitor
 
 on:
   push:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: android-release-${{ github.ref }}
+  group: battery-monitor-release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -39,30 +39,20 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
-      - name: Set unique Android version
+      - name: Version
         run: |
           echo "VERSION_NAME=0.4.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - name: Test and compile
-        run: |
-          gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug \
-            -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
-      - name: Verify uniform application ID
-        run: |
-          APK="app/build/outputs/apk/debug/app-debug.apk"
-          PKG=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")
-          test "$PKG" = "com.tihloh.bmsmonitor" || {
-            echo "::error::Unexpected debug package ID: $PKG"
-            exit 1
-          }
-      - name: Require permanent signing for publishable APKs
+      - name: Test release code
+        run: gradle --no-daemon :app:testReleaseUnitTest -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+      - name: Require permanent APK signing key
         if: github.event_name != 'pull_request'
         run: |
           if [[ -z "$KEYSTORE_B64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
-            echo "::error::Production APK not published. Configure the four ANDROID_KEYSTORE_* repository secrets. Never publish a new ephemeral debug key as an update."
+            echo "::error::Cannot create in-place Android updates without permanent signing credentials. Configure the four ANDROID_KEYSTORE_* secrets. No incompatible APK will be released."
             exit 1
           fi
-      - name: Build with one permanent signing key
+      - name: Build the single signed production APK
         if: github.event_name != 'pull_request'
         run: |
           printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/bms-release.jks"
@@ -72,30 +62,34 @@ jobs:
             -PSIGNING_STORE_FILE="$RUNNER_TEMP/bms-release.jks" \
             -PSIGNING_STORE_PASSWORD="$STORE_PASSWORD" \
             -PSIGNING_KEY_ALIAS="$KEY_ALIAS" -PSIGNING_KEY_PASSWORD="$KEY_PASSWORD"
-      - name: Verify production APK before publishing
+      - name: Verify APK, identity, signature and version
         if: github.event_name != 'pull_request'
         run: |
           APK="app/build/outputs/apk/release/app-release.apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
-          PKG=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")
+          BADGING=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK")
+          PKG=$(printf '%s\n' "$BADGING" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")
+          CODE=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\\([^']*\\)'.*/\\1/p")
           test "$PKG" = "com.tihloh.bmsmonitor" || {
-            echo "::error::Unexpected production package ID: $PKG"
-            exit 1
+            echo "::error::Unexpected APK package ID: $PKG"; exit 1;
           }
-      - name: Upload production APK build artifact
+          test "$CODE" = "$VERSION_CODE" || {
+            echo "::error::Unexpected APK versionCode: $CODE"; exit 1;
+          }
+      - name: Upload release APK artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
           name: Battery-Monitor-v${{ env.VERSION_NAME }}
           path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Publish signed GitHub Release after every successful main update
+      - name: Publish one GitHub Release for every main update
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           TAG="v$VERSION_NAME"
-          OUTPUT="Battery-Monitor-$TAG.apk"
-          cp app/build/outputs/apk/release/app-release.apk "$OUTPUT"
-          gh release create "$TAG" "$OUTPUT" \
+          APK="Battery-Monitor-$TAG.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$APK"
+          gh release create "$TAG" "$APK" \
             --title "Battery Monitor $TAG" \
-            --notes "Production update for com.tihloh.bmsmonitor. versionCode $VERSION_CODE. A matching installed signing certificate is required for in-place updates. Commit: $GITHUB_SHA." \
+            --notes "Single application ID: com.tihloh.bmsmonitor. Signed in-place update; the installed APK must use a compatible signing certificate. versionCode $VERSION_CODE. Commit $GITHUB_SHA." \
             --target "$GITHUB_SHA"
