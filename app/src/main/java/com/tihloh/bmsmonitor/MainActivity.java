@@ -60,7 +60,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private TextView liveIndicator, cellFreshness, cellSummary;
     private TextView protocolLabel, deviceName, detailsAge, batteryTemperature,
             protectionStatus, mosCharge, mosDischarge, balancingStatus,
-            cycleCount, manufactureDate, firmwareVersion, reportedCells, usageEstimate;
+            cycleCount, manufactureDate, firmwareVersion, reportedCells, usageEstimate,
+            batteryHealth, extendedNotice;
     private long lastDetailsReadingMs = -1;
     private String currentProtocol = "Not identified";
     private String connectedDeviceLabel = "Unavailable";
@@ -251,18 +252,22 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         diagnostics.addView(text("BMS status & sensors", 15, NAVY, true));
         protocolLabel = text("Protocol: Not identified", 12, MUTED, false);
         diagnostics.addView(protocolLabel, below(0, 5));
-        detailsAge = text("Additional fields appear when the protocol provides them.", 11, MUTED, false);
+        detailsAge = text("Waiting for battery status", 11, MUTED, false);
         diagnostics.addView(detailsAge, below(0, 3));
         deviceName = addDetail(diagnostics, "Device", "Unavailable");
+        batteryTemperature = addDetail(diagnostics, "Temperatures", "Unavailable");
+        reportedCells = addDetail(diagnostics, "Reported cells", "Unavailable");
         protectionStatus = addDetail(diagnostics, "Active protections", "Unavailable");
         mosCharge = addDetail(diagnostics, "Charge MOSFET", "Unavailable");
         mosDischarge = addDetail(diagnostics, "Discharge MOSFET", "Unavailable");
         balancingStatus = addDetail(diagnostics, "Balancing", "Unavailable");
-        batteryTemperature = addDetail(diagnostics, "Temperatures", "Unavailable");
         cycleCount = addDetail(diagnostics, "Cycle count", "Unavailable");
-        reportedCells = addDetail(diagnostics, "Reported cells", "Unavailable");
+        batteryHealth = addDetail(diagnostics, "Battery health", "Unavailable");
         firmwareVersion = addDetail(diagnostics, "BMS software", "Unavailable");
         manufactureDate = addDetail(diagnostics, "Manufacture date", "Unavailable");
+        extendedNotice = text("", 11, MUTED, false);
+        extendedNotice.setVisibility(View.GONE);
+        diagnostics.addView(extendedNotice, below(0, 7));
         dashboardView.addView(diagnostics, below(0, 9));
 
         LinearLayout cells = panel();
@@ -330,12 +335,30 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     private TextView addDetail(LinearLayout container, String label, String value) {
         TextView t = text(label + ": " + value, 13, NAVY, false);
+        t.setVisibility(View.GONE);
         container.addView(t, below(0, 5));
         return t;
     }
 
+    /** Hide unsupported fields instead of filling a long card with Unavailable. */
     private static void setDetail(TextView view, String label, String value) {
-        if (view != null) view.setText(label + ": " + value);
+        if (view == null) return;
+        boolean hasValue = value != null && !value.trim().isEmpty() && !"Unavailable".equals(value);
+        view.setVisibility(hasValue ? View.VISIBLE : View.GONE);
+        if (hasValue) view.setText(label + ": " + value);
+    }
+
+    private void refreshExtendedNotice() {
+        if (extendedNotice == null) return;
+        String notice = "";
+        if ("Gentai / ECO".equals(currentProtocol)) {
+            notice = "Gentai extended values are provisional; verify against the Gentai app. "
+                    + "MOSFET, balancing and protection details have no verified decoder yet.";
+        } else if ("Standard BLE Battery Service".equals(currentProtocol)) {
+            notice = "This Bluetooth profile reports only battery level.";
+        }
+        extendedNotice.setText(notice);
+        extendedNotice.setVisibility(notice.isEmpty() ? View.GONE : View.VISIBLE);
     }
 
     private boolean systemNotificationsAllowed() {
@@ -565,11 +588,17 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             updated.setText((live ? telemetryCondition : "Readings are not updating") +
                     "  •  " + ageLabel(age));
         }
-        if (detailsAge != null && bmsConnected && "JBD / Xiaoxiang".equals(currentProtocol)) {
-            if (lastDetailsReadingMs < 0) detailsAge.setText("Waiting for extended JBD telemetry");
-            else {
+        if (detailsAge != null && bmsConnected) {
+            if (lastDetailsReadingMs < 0) {
+                detailsAge.setText("JBD / Xiaoxiang".equals(currentProtocol)
+                        ? "Waiting for extended BMS data"
+                        : "Gentai / ECO".equals(currentProtocol)
+                        ? "Waiting for supported Gentai extended data" : "Status details not available");
+                detailsAge.setTextColor(MUTED);
+            } else {
                 long age = Math.max(0, now - lastDetailsReadingMs);
-                detailsAge.setText((age < 10000 ? "Extended data updated " : "Extended data stale · ") + ageLabel(age));
+                detailsAge.setText((age < 10000 ? "Extended readings " : "Extended readings stale · ")
+                        + ageLabel(age));
                 detailsAge.setTextColor(age < 10000 ? MUTED : Color.rgb(174, 98, 0));
             }
         }
@@ -619,6 +648,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         lastCellsReadingMs = -1;
         lastDetailsReadingMs = -1;
         if (protocolLabel != null) protocolLabel.setText("Protocol: " + currentProtocol);
+        refreshExtendedNotice();
         if (detailsAge != null) {
             detailsAge.setText("Additional fields appear when the protocol provides them.");
             detailsAge.setTextColor(MUTED);
@@ -631,6 +661,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         setDetail(balancingStatus, "Balancing", "Unavailable");
         setDetail(batteryTemperature, "Temperatures", "Unavailable");
         setDetail(cycleCount, "Cycle count", "Unavailable");
+        setDetail(batteryHealth, "Battery health", "Unavailable");
         setDetail(reportedCells, "Reported cells", "Unavailable");
         setDetail(firmwareVersion, "BMS software", "Unavailable");
         setDetail(manufactureDate, "Manufacture date", "Unavailable");
@@ -743,6 +774,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             currentProtocol = protocol;
             if (protocolLabel != null) protocolLabel.setText("Protocol: " + protocol);
+            refreshExtendedNotice();
         });
     }
 
@@ -777,6 +809,26 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         });
     }
 
+    @Override public void onGentaiDetails(BatteryProtocol.GentaiDetails b) {
+        runOnUiThread(() -> {
+            if (!bmsConnected || !"Gentai / ECO".equals(currentProtocol)) return;
+            lastDetailsReadingMs = SystemClock.elapsedRealtime();
+            java.util.ArrayList<String> temperatures = new java.util.ArrayList<>();
+            for (int i = 0; i < b.possibleTemperaturesC.length; i++) {
+                double value = b.possibleTemperaturesC[i];
+                if (!Double.isNaN(value))
+                    temperatures.add(String.format(Locale.US, "T%d %.0f°C", i + 1, value));
+            }
+            setDetail(batteryTemperature, "Possible temperatures",
+                    temperatures.isEmpty() ? null : android.text.TextUtils.join(" · ", temperatures));
+            setDetail(cycleCount, "Cycles (provisional)",
+                    Integer.toString(b.possibleCycleCount));
+            setDetail(batteryHealth, "Health (provisional)",
+                    b.possibleHealthPercent >= 0 ? b.possibleHealthPercent + " %" : null);
+            updateLiveIndicator();
+        });
+    }
+
     @Override public void onBatteryLevel(int percent) {
         runOnUiThread(() -> {
             if (!bmsConnected) return;
@@ -791,6 +843,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         runOnUiThread(() -> {
             if (!bmsConnected) return;
             lastCellsReadingMs = SystemClock.elapsedRealtime();
+            setDetail(reportedCells, "Cells measured", Integer.toString(cells.length));
             cellList.removeAllViews();
             double min = Double.MAX_VALUE, max = 0;
             for (double v : cells) { min = Math.min(min, v); max = Math.max(max, v); }
