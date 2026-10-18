@@ -9,6 +9,7 @@ public class JbdProtocolTest {
     @Test public void permitsOnlyReadOnlyJbdCommands() {
         assertEquals("DDA50300FFFD77", BatteryProtocol.hex(JbdProtocol.request(0x03)));
         assertEquals("DDA50400FFFC77", BatteryProtocol.hex(JbdProtocol.request(0x04)));
+        assertEquals("DDA50500FFFB77", BatteryProtocol.hex(JbdProtocol.request(0x05)));
         try { JbdProtocol.request(0xe1); fail("JBD write command must never be allowed"); }
         catch (IllegalArgumentException expected) { }
     }
@@ -55,6 +56,50 @@ public class JbdProtocolTest {
         assertEquals(10, info.socPercent, 0.001);
         double[] cells = JbdProtocol.parseCells(response(4, hex("0CC80CCA0CC7")));
         assertArrayEquals(new double[]{3.272, 3.274, 3.271}, cells, 0.001);
+    }
+
+    @Test public void parsesDocumentedExtendedJbdTelemetry() {
+        byte[] frame = hex("DD03001D060B000001ED01F400002C7C00000000100080630204030BA00B9D0B98FA5577");
+        JbdProtocol.Details d = JbdProtocol.parseDetails(frame);
+        assertNotNull(d);
+        assertEquals(0, d.cycleCount);
+        assertEquals("2022-03-28", d.manufactureDate);
+        assertEquals("8.0", d.softwareVersion);
+        assertEquals(4, d.cellCount);
+        assertFalse(d.chargeMosOn);
+        assertTrue(d.dischargeMosOn);
+        assertEquals(0L, d.balancingMask);
+        assertEquals(0x1000, d.protectionFlags);
+        assertEquals(3, d.temperaturesC.length);
+        assertEquals(24.45, d.temperaturesC[0], 0.01);
+        assertEquals(24.15, d.temperaturesC[1], 0.01);
+        assertEquals(23.65, d.temperaturesC[2], 0.01);
+        assertTrue(d.protectionSummary().contains("FET configuration lock"));
+    }
+
+    @Test public void decodesBalancingAndActiveProtectionAndMos() {
+        byte[] payload = Arrays.copyOfRange(
+            hex("DD03001D060B000001ED01F400002C7C00000000100080630204030BA00B9D0B98FA5577"),
+            4, 33);
+        payload[12] = 0; payload[13] = 0x05; // Cells 1 and 3 balancing.
+        payload[16] = 0x04; payload[17] = 0x01; // Short circuit, cell overvolt.
+        payload[20] = 0x03; // Both MOSFETs conducting.
+        JbdProtocol.Details d = JbdProtocol.parseDetails(response(3, payload));
+        assertNotNull(d);
+        assertTrue(d.chargeMosOn);
+        assertTrue(d.dischargeMosOn);
+        assertEquals(5, d.balancingMask);
+        assertEquals("Cell 1, 3", d.activeBalancingCells());
+        assertTrue(d.protectionSummary().contains("Short circuit"));
+        assertTrue(d.protectionSummary().contains("Cell overvoltage"));
+        payload[22] = 4; // Reports four NTC sensors but contains three.
+        assertNull(JbdProtocol.parseDetails(response(3, payload)));
+    }
+
+    @Test public void readsOnlySupportedIdentityFormat() {
+        byte[] name = new byte[] {3, 'J', 'B', 'D'};
+        assertEquals("JBD", JbdProtocol.parseDeviceName(response(5, name)));
+        assertNull(JbdProtocol.parseDeviceName(response(5, new byte[] {10, 'J'})));
     }
 
     private static byte[] response(int command, byte[] payload) {
