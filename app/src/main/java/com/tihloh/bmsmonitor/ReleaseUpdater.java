@@ -72,10 +72,6 @@ public final class ReleaseUpdater {
         long now = System.currentTimeMillis();
         long last = activity.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .getLong(LAST_CHECK, 0);
-        if (BuildConfig.DEBUG) {
-            callback.onMessage("Development build: in-app production updates are unavailable. New dev APKs require separate installation; see GitHub Releases.");
-            return;
-        }
         if (!force && now - last < CHECK_INTERVAL_MS) return;
         if (busy) return;
         busy = true;
@@ -111,8 +107,8 @@ public final class ReleaseUpdater {
     }
 
     private static Release latestRelease() throws Exception {
-        // Stable production releases only. Dev/debug APKs have a different package
-        // ID and are never valid in-place replacements for this application.
+        // Stable production releases only. Every build uses the same application ID,
+        // but only matching-signature releases can update an installed APK.
         String body = getText("https://api.github.com/repos/" + REPO + "/releases?per_page=15");
         JSONArray releases = new JSONArray(body);
         Release latest = null;
@@ -209,15 +205,6 @@ public final class ReleaseUpdater {
             return;
         }
         pendingPermission = null;
-        if (BuildConfig.DEBUG) {
-            callback.onMessage("Experimental APK cannot upgrade to a differently signed production APK. One-time reinstall required.");
-            new AlertDialog.Builder(activity).setTitle("Production installation")
-                    .setMessage("Your current experimental APK may have a different signing key. Android cannot replace it with a production APK. Save any data you need, uninstall the experimental app and install the production release once. Future releases will use the permanent signing key.")
-                    .setPositiveButton("View releases", (dialog, which) -> activity.startActivity(
-                            new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/" + REPO + "/releases"))))
-                    .setNegativeButton("Cancel", null).show();
-            return;
-        }
         if (busy) return;
         busy = true;
         callback.onMessage("Preparing update " + release.version + " internally…");
@@ -326,7 +313,7 @@ public final class ReleaseUpdater {
             String actual = candidate == null ? "unrecognized APK" : candidate.packageName;
             throw new IOException("Incorrect APK package: " + actual
                     + ". Expected " + activity.getPackageName()
-                    + ". Development APKs cannot upgrade the production app.");
+                    + ". Refusing to install a different application.");
         }
         PackageInfo installed = pm.getPackageInfo(activity.getPackageName(), flags);
         long candidateCode = Build.VERSION.SDK_INT >= 28
