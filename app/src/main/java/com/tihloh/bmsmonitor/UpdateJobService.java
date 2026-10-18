@@ -43,6 +43,7 @@ public final class UpdateJobService extends JobService {
 
     @Override public boolean onStartJob(JobParameters params) {
         stopped = false;
+        if (BuildConfig.DEBUG) { jobFinished(params, false); return false; }
         new Thread(() -> {
             try {
                 String version = findNewVersion();
@@ -82,15 +83,14 @@ public final class UpdateJobService extends JobService {
             String newest = null;
             for (int i=0;i<releases.length();i++) {
                 JSONObject release = releases.optJSONObject(i);
-                if (release == null || release.optBoolean("draft") ||
-                        (release.optBoolean("prerelease") && !BuildConfig.DEBUG)) continue;
+                if (release == null || release.optBoolean("draft") || release.optBoolean("prerelease")) continue;
                 String version = release.optString("tag_name").replaceFirst("^v","");
                 if (!version.matches("\\d+\\.\\d+\\.\\d+")) continue;
                 JSONArray assets = release.optJSONArray("assets");
                 boolean apk = false;
                 if (assets != null) for(int j=0;j<assets.length();j++) {
                     JSONObject a = assets.optJSONObject(j);
-                    if (a != null && a.optString("name").endsWith(".apk")) apk = true;
+                    if (a != null && a.optString("name").endsWith(".apk") && !a.optString("name").toLowerCase(java.util.Locale.US).contains("debug")) apk = true;
                 }
                 if (apk && newer(version, BuildConfig.VERSION_NAME)
                         && (newest == null || newer(version, newest))) newest = version;
