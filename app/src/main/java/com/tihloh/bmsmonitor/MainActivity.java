@@ -260,12 +260,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         logBox.addView(logText);
         connectionView.addView(logBox, below(0, 10));
 
-        TextView footer = text("Experimental read-only monitor. Not a battery protection system.", 11, MUTED, false);
+        TextView footer = text("Read-only battery monitor. Not a substitute for battery protection.", 11, MUTED, false);
         footer.setGravity(Gravity.CENTER);
         LinearLayout aboutCard = panel();
         aboutCard.addView(text(getString(R.string.app_name), 18, NAVY, true));
         aboutCard.addView(text("Version " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")", 13, MUTED, false), below(0, 5));
         aboutCard.addView(text("Developer: Christian Bustamante", 13, NAVY, true), below(0, 6));
+        aboutCard.addView(text(BuildConfig.DEBUG ? "Channel: Development preview" : "Channel: Production", 12, MUTED, true), below(0, 4));
         aboutCard.addView(text("Read-only Bluetooth LE battery monitor. Updates use Android PackageInstaller; Android may require installation approval.", 12, MUTED, false), below(0, 8));
         Button source = button("GitHub releases", false);
         source.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
@@ -458,6 +459,17 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         super.onResume();
         if (updater != null) updater.onResume();
         refreshNotificationSwitch();
+        String lastError = getSharedPreferences("bms_updates", MODE_PRIVATE)
+                .getString("last_install_error", null);
+        if (lastError != null && !lastError.isEmpty()) {
+            getSharedPreferences("bms_updates", MODE_PRIVATE).edit()
+                    .remove("last_install_error").apply();
+            showPage(2);
+            if (firmwareHint != null) firmwareHint.setText("Last update failed. See details below.");
+            new AlertDialog.Builder(this).setTitle("Update could not be installed")
+                    .setMessage(lastError)
+                    .setPositiveButton("OK", null).show();
+        }
     }
 
     @Override public void onStatus(String message, boolean connected) {
