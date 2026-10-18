@@ -110,10 +110,10 @@ public final class JbdProtocol {
     public static Details parseDetails(byte[] frame) {
         if (!valid(frame, 0x03)) return null;
         int length = frame[3] & 0xff;
-        if (length < 22) return null;
-        int cells = frame[4 + 20] & 0xff;
-        int count = frame[4 + 21] & 0xff;
-        if (cells < 1 || cells > 32 || count > 16 || length < 22 + count * 2)
+        if (length < 23) return null;
+        int cells = frame[4 + 21] & 0xff;
+        int count = frame[4 + 22] & 0xff;
+        if (cells < 1 || cells > 32 || count > 16 || length < 23 + count * 2)
             return null;
         int cycles = u16(frame, 4 + 8);
         int date = u16(frame, 4 + 10);
@@ -123,15 +123,15 @@ public final class JbdProtocol {
         String manufactured = month >= 1 && month <= 12 && day >= 1 && day <= 31
                 ? String.format(Locale.US, "%04d-%02d-%02d", year, month, day)
                 : "Unavailable";
-        int firmware = frame[4 + 17] & 0xff;
+        int firmware = frame[4 + 18] & 0xff;
         String version = String.format(Locale.US, "%d.%d", firmware >>> 4, firmware & 0xf);
         long balance = (u16(frame, 4 + 12) & 0xffffL)
                 | ((long) u16(frame, 4 + 14) << 16);
         int faults = u16(frame, 4 + 16);
-        int mos = frame[4 + 19] & 0xff;
+        int mos = frame[4 + 20] & 0xff;
         double[] temps = new double[count];
         for (int i = 0; i < count; i++) {
-            int raw = u16(frame, 4 + 22 + 2 * i);
+            int raw = u16(frame, 4 + 23 + 2 * i);
             double c = raw / 10.0 - 273.15;
             if (raw < 1800 || raw > 4000) return null;
             temps[i] = c;
