@@ -99,6 +99,8 @@ public class JbdProtocolTest {
     @Test public void readsOnlySupportedIdentityFormat() {
         byte[] name = new byte[] {3, 'J', 'B', 'D'};
         assertEquals("JBD", JbdProtocol.parseDeviceName(response(5, name)));
+        assertEquals("Xiaoxiang", JbdProtocol.parseDeviceName(response(5,
+                "Xiaoxiang".getBytes(java.nio.charset.StandardCharsets.US_ASCII))));
         assertNull(JbdProtocol.parseDeviceName(response(5, new byte[] {10, 'J'})));
     }
 
