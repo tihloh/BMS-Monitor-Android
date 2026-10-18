@@ -23,7 +23,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.UUID;
 
-/** BLE central for the known Gentai/ECO telemetry-only GATT profile. */
+/** BLE central with read-only Gentai, JBD/Xiaoxiang and standard Battery Service support. */
 @SuppressLint("MissingPermission")
 public final class BleClient {
     public interface Listener {
@@ -39,6 +39,9 @@ public final class BleClient {
     private static final UUID SERVICE = UUID.fromString("00000001-0000-1000-8000-00805f9b34fb");
     private static final UUID WRITE = UUID.fromString("00000002-0000-1000-8000-00805f9b34fb");
     private static final UUID NOTIFY = UUID.fromString("00000003-0000-1000-8000-00805f9b34fb");
+    private static final UUID JBD_SERVICE = UUID.fromString("0000ff00-0000-1000-8000-00805f9b34fb");
+    private static final UUID JBD_NOTIFY = UUID.fromString("0000ff01-0000-1000-8000-00805f9b34fb");
+    private static final UUID JBD_WRITE = UUID.fromString("0000ff02-0000-1000-8000-00805f9b34fb");
     private static final UUID BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb");
     private static final UUID BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
@@ -48,12 +51,15 @@ public final class BleClient {
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final BluetoothAdapter adapter;
     private final BatteryProtocol.Assembler assembler = new BatteryProtocol.Assembler();
+    private final JbdProtocol.Assembler jbdAssembler = new JbdProtocol.Assembler();
 
     private BluetoothLeScanner scanner;
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic writer;
     private volatile boolean ready;
     private boolean standardBatteryMode;
+    private boolean jbdMode;
+    private BluetoothGattCharacteristic notifyCharacteristic;
     private int discoveredCount;
     private volatile boolean scanning;
     private boolean legacyScanning;
@@ -164,10 +170,10 @@ public final class BleClient {
         @Override public void run() {
             if (!ready) return;
             pollIndex++;
-            request(0x21);
+            request(jbdMode ? 0x03 : 0x21);
             if (pollIndex % 3 == 0) {
                 handler.postDelayed(() -> {
-                    if (ready) request(0x22);
+                    if (ready) request(jbdMode ? 0x04 : 0x22);
                 }, 1200);
             }
             handler.postDelayed(this, 5000);
@@ -254,6 +260,9 @@ public final class BleClient {
         stopScan();
         disconnect();
         assembler.reset();
+        jbdAssembler.reset();
+        jbdMode = false;
+        notifyCharacteristic = null;
         standardBatteryMode = false;
         writeInProgress = false;
         pendingCommand = -1;
@@ -302,6 +311,9 @@ public final class BleClient {
                     if (g == gatt) {
                         ready = false;
                         writer = null;
+                        notifyCharacteristic = null;
+                        jbdMode = false;
+                        standardBatteryMode = false;
                         writeInProgress = false;
                         pendingCommand = -1;
                         handler.removeCallbacks(pollTask);
@@ -320,29 +332,46 @@ public final class BleClient {
                 return;
             }
             BluetoothGattService service = g.getService(SERVICE);
-            if (service == null) {
-                log("This device does not expose the supported 0001 service");
-                BluetoothGattService standard = g.getService(BATTERY_SERVICE);
-                BluetoothGattCharacteristic level = standard == null ? null : standard.getCharacteristic(BATTERY_LEVEL);
-                if (level == null) {
-                    for (BluetoothGattService detected : g.getServices())
-                        log("GATT service: " + detected.getUuid());
-                    status("Connected, but device telemetry protocol is not supported yet", false);
+            BluetoothGattCharacteristic notifications = null;
+            jbdMode = false;
+            standardBatteryMode = false;
+            if (service != null) {
+                writer = service.getCharacteristic(WRITE);
+                notifications = service.getCharacteristic(NOTIFY);
+                if (writer == null || notifications == null) {
+                    status("Gentai telemetry characteristics missing", false);
                     return;
                 }
-                standardBatteryMode = true;
-                ready = true;
-                handler.removeCallbacks(connectionTimeout);
-                status("Connected — standard BLE battery level", true);
-                g.readCharacteristic(level);
-                return;
+                log("Detected Gentai/ECO telemetry service");
+            } else {
+                service = g.getService(JBD_SERVICE);
+                if (service != null) {
+                    writer = service.getCharacteristic(JBD_WRITE);
+                    notifications = service.getCharacteristic(JBD_NOTIFY);
+                    if (writer == null || notifications == null) {
+                        status("JBD service found but FF01/FF02 characteristics are missing", false);
+                        return;
+                    }
+                    jbdMode = true;
+                    log("Detected JBD/Xiaoxiang BLE profile FF00 / FF01 / FF02");
+                } else {
+                    BluetoothGattService standard = g.getService(BATTERY_SERVICE);
+                    BluetoothGattCharacteristic level = standard == null ? null : standard.getCharacteristic(BATTERY_LEVEL);
+                    if (level == null) {
+                        for (BluetoothGattService detected : g.getServices())
+                            log("Unsupported GATT service: " + detected.getUuid());
+                        status("Connected, but device telemetry protocol is not supported yet", false);
+                        return;
+                    }
+                    standardBatteryMode = true;
+                    ready = true;
+                    handler.removeCallbacks(connectionTimeout);
+                    status("Connected — standard BLE battery level", true);
+                    g.readCharacteristic(level);
+                    return;
+                }
             }
-            writer = service.getCharacteristic(WRITE);
-            BluetoothGattCharacteristic notifications = service.getCharacteristic(NOTIFY);
-            if (writer == null || notifications == null) {
-                status("BMS telemetry characteristics missing", false);
-                return;
-            }
+            notifyCharacteristic = notifications;
             if (!g.setCharacteristicNotification(notifications, true)) {
                 status("Could not enable BLE notifications", false);
                 return;
@@ -372,8 +401,9 @@ public final class BleClient {
                 if (g != gatt) return;
                 ready = true;
                 handler.removeCallbacks(connectionTimeout);
-                status("Connected — reading live battery telemetry", true);
-                log("Notifications enabled on 0003");
+                status(jbdMode ? "Connected — reading JBD battery telemetry" :
+                        "Connected — reading Gentai battery telemetry", true);
+                log(jbdMode ? "JBD FF01 notifications enabled" : "Gentai 0003 notifications enabled");
                 pollIndex = 0;
                 handler.removeCallbacks(pollTask);
                 handler.postDelayed(pollTask, 350);
@@ -429,7 +459,24 @@ public final class BleClient {
             publishBatteryLevel(bytes);
             return;
         }
-        if (!NOTIFY.equals(characteristic.getUuid())) return;
+        if (notifyCharacteristic == null ||
+                !notifyCharacteristic.getUuid().equals(characteristic.getUuid())) return;
+        if (jbdMode) {
+            log("JBD RX " + BatteryProtocol.hex(bytes));
+            for (byte[] packet : jbdAssembler.feed(Arrays.copyOf(bytes, bytes.length))) {
+                int code = packet[1] & 0xff;
+                if (code == 0x03) {
+                    BatteryProtocol.BatteryInfo info = JbdProtocol.parseInfo(packet);
+                    if (info != null) handler.post(() -> listener.onInfo(info));
+                    else log("Invalid JBD basic telemetry frame");
+                } else if (code == 0x04) {
+                    double[] cells = JbdProtocol.parseCells(packet);
+                    if (cells.length > 0) handler.post(() -> listener.onCells(cells));
+                    else log("Invalid JBD cell telemetry frame");
+                }
+            }
+            return;
+        }
         byte[] copy = Arrays.copyOf(bytes, bytes.length);
         log("RX " + BatteryProtocol.hex(copy));
         List<byte[]> packets = assembler.feed(copy);
@@ -467,19 +514,44 @@ public final class BleClient {
             pendingCommand = code;
             return;
         }
-        byte[] payload = BatteryProtocol.request(code);
+        byte[] payload = jbdMode ? JbdProtocol.request(code) : BatteryProtocol.request(code);
+        int properties = writer.getProperties();
+        int writeType = (properties & BluetoothGattCharacteristic.PROPERTY_WRITE) != 0
+                ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+                : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
         try {
             int result;
             if (Build.VERSION.SDK_INT >= 33) {
-                result = gatt.writeCharacteristic(writer, payload, BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                result = gatt.writeCharacteristic(writer, payload, writeType);
             } else {
-                writer.setWriteType(BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT);
+                writer.setWriteType(writeType);
                 writer.setValue(payload);
                 result = gatt.writeCharacteristic(writer) ? BluetoothGatt.GATT_SUCCESS : -1;
             }
             if (result == BluetoothGatt.GATT_SUCCESS) {
                 writeInProgress = true;
-                log("TX " + BatteryProtocol.hex(payload));
+                log((jbdMode ? "JBD TX " : "TX ") + BatteryProtocol.hex(payload));
+                if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
+                    // No write callback is guaranteed for WRITE_NO_RESPONSE GATT characteristics.
+                    handler.postDelayed(() -> {
+                        if (writeInProgress) {
+                            writeInProgress = false;
+                            if (pendingCommand >= 0) {
+                                int next = pendingCommand;
+                                pendingCommand = -1;
+                                handler.postDelayed(() -> request(next), 180);
+                            }
+                        }
+                    }, 350);
+                } else {
+                    // Recover if a device never reports onCharacteristicWrite.
+                    handler.postDelayed(() -> {
+                        if (writeInProgress && ready) {
+                            log("Write callback timed out; retry permitted on next poll");
+                            writeInProgress = false;
+                        }
+                    }, 2200);
+                }
             }
             else log("Could not queue request 0x" + Integer.toHexString(code) + " (" + result + ")");
         } catch (SecurityException | IllegalStateException e) {
@@ -493,6 +565,9 @@ public final class BleClient {
         handler.removeCallbacks(connectionTimeout);
         ready = false;
         standardBatteryMode = false;
+        jbdMode = false;
+        notifyCharacteristic = null;
+        jbdAssembler.reset();
         writer = null;
         writeInProgress = false;
         pendingCommand = -1;
