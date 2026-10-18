@@ -32,6 +32,7 @@ public final class BleClient {
         void onScanFinished();
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onDetails(JbdProtocol.Details details);
+        void onGentaiDetails(BatteryProtocol.GentaiDetails details);
         void onProtocol(String protocol);
         void onDeviceIdentity(String name);
         void onCells(double[] voltages);
@@ -547,8 +548,13 @@ public final class BleClient {
             int cmd = packet[1] & 0xFF;
             if (cmd == 0x21) {
                 BatteryProtocol.BatteryInfo info = BatteryProtocol.parseInfo(packet);
-                if (info != null) handler.post(() -> listener.onInfo(info));
-                else log("Unrecognized battery-info packet: " + BatteryProtocol.hex(packet));
+                if (info != null) {
+                    handler.post(() -> { if (g == gatt) listener.onInfo(info); });
+                    BatteryProtocol.GentaiDetails details = BatteryProtocol.parseGentaiDetails(packet);
+                    if (details != null) handler.post(() -> {
+                        if (g == gatt) listener.onGentaiDetails(details);
+                    });
+                } else log("Unrecognized battery-info packet: " + BatteryProtocol.hex(packet));
             } else if (cmd == 0x22) {
                 double[] cells = BatteryProtocol.parseCells(packet);
                 if (cells.length > 0) handler.post(() -> listener.onCells(cells));
