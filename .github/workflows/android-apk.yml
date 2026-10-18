@@ -45,15 +45,18 @@ jobs:
           echo "VERSION_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
       - name: Test
         run: gradle --no-daemon :app:testDebugUnitTest
-      - name: Require permanent production signing credentials
+      - name: Select release channel
         if: github.event_name != 'pull_request'
         run: |
-          test -n "$KEYSTORE_B64" && test -n "$STORE_PASSWORD" && test -n "$KEY_ALIAS" && test -n "$KEY_PASSWORD" || {
-            echo "::error::Production signing secrets are required. Refusing to publish an incompatible debug APK."
-            exit 1
-          }
+          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
+            echo "HAS_SIGNING=true" >> "$GITHUB_ENV"
+            echo "Production signing configured."
+          else
+            echo "HAS_SIGNING=false" >> "$GITHUB_ENV"
+            echo "::warning::No production signing secrets. Publishing development prerelease only."
+          fi
       - name: Build production-signed APK
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && env.HAS_SIGNING == 'true'
         run: |
           echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/bms-release.jks"
           chmod 600 "$RUNNER_TEMP/bms-release.jks"
@@ -64,8 +67,14 @@ jobs:
             -PSIGNING_KEY_ALIAS="$KEY_ALIAS" -PSIGNING_KEY_PASSWORD="$KEY_PASSWORD"
           echo "APK_PATH=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
           echo "SIGNED=true" >> "$GITHUB_ENV"
+      - name: Build isolated development APK
+        if: github.event_name != 'pull_request' && env.HAS_SIGNING != 'true'
+        run: |
+          gradle --no-daemon :app:assembleDebug -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+          echo "APK_PATH=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
+          echo "SIGNED=false" >> "$GITHUB_ENV"
       - name: Verify production APK signature and package
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' && env.HAS_SIGNING == 'true'
         run: |
           APK="$APK_PATH"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
@@ -84,13 +93,20 @@ jobs:
           name: Battery-Monitor-APK
           path: ${{ env.APK_PATH }}
           if-no-files-found: error
-      - name: Publish a new immutable GitHub release on every main branch update
+      - name: Publish a versioned release for every main update
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           TAG="v$VERSION_NAME"
-          OUTPUT="Battery-Monitor-$TAG.apk"
-          NOTES="Production-signed APK. Install upgrades only from releases signed with the same permanent key."
+          if [[ "$SIGNED" == "true" ]]; then
+            OUTPUT="Battery-Monitor-$TAG.apk"
+            NOTES="Production-signed APK. In-place updates require this permanent signing identity."
+            FLAGS=()
+          else
+            OUTPUT="Battery-Monitor-$TAG-dev.apk"
+            NOTES="Development preview only. Uses com.tihloh.bmsmonitor.debug and an ephemeral runner debug signing key. Not a production app update and may not update previous dev installations."
+            FLAGS=(--prerelease)
+          fi
           cp "$APK_PATH" "$OUTPUT"
           gh release create "$TAG" "$OUTPUT" --title "Battery Monitor $TAG" \
             --notes "$NOTES Version code: $VERSION_CODE. Commit: $GITHUB_SHA." \
-            --target "$GITHUB_SHA"
+            "${FLAGS[@]}" --target "$GITHUB_SHA"
