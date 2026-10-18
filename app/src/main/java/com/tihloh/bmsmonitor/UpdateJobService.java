@@ -43,7 +43,6 @@ public final class UpdateJobService extends JobService {
 
     @Override public boolean onStartJob(JobParameters params) {
         stopped = false;
-        if (BuildConfig.DEBUG) { jobFinished(params, false); return false; }
         new Thread(() -> {
             try {
                 String version = findNewVersion();
