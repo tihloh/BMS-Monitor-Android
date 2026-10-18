@@ -63,7 +63,15 @@ public final class BleClient {
     private int discoveredCount;
     private volatile boolean scanning;
     private boolean legacyScanning;
+    // Refresh the dashboard from confirmed BMS packets, not from a UI-only timer.
+    // Read-only polling is moderate to avoid saturating low-cost BLE UART adapters.
+    private static final long BASIC_POLL_MS = 2000L;
+    private static final int CELL_POLL_EVERY = 4; // ~8 seconds
+    private static final long STANDARD_BATTERY_POLL_MS = 3000L;
     private int pollIndex;
+    private volatile int connectionGeneration;
+    private boolean standardReadInProgress;
+    private long lastRawLogMs;
     private boolean writeInProgress;
     private int pendingCommand = -1;
 
@@ -169,14 +177,23 @@ public final class BleClient {
     private final Runnable pollTask = new Runnable() {
         @Override public void run() {
             if (!ready) return;
-            pollIndex++;
-            request(jbdMode ? 0x03 : 0x21);
-            if (pollIndex % 3 == 0) {
-                handler.postDelayed(() -> {
-                    if (ready) request(jbdMode ? 0x04 : 0x22);
-                }, 1200);
+            if (standardBatteryMode) {
+                readStandardBattery();
+                handler.postDelayed(this, STANDARD_BATTERY_POLL_MS);
+                return;
             }
-            handler.postDelayed(this, 5000);
+            pollIndex++;
+            // Read the complete battery status every two seconds, and cell data every
+            // fourth cycle. Packet notifications are decoded as soon as they arrive.
+            request(jbdMode ? 0x03 : 0x21);
+            if (pollIndex % CELL_POLL_EVERY == 0) {
+                final int generation = connectionGeneration;
+                handler.postDelayed(() -> {
+                    if (ready && generation == connectionGeneration && !standardBatteryMode)
+                        request(jbdMode ? 0x04 : 0x22);
+                }, 600);
+            }
+            handler.postDelayed(this, BASIC_POLL_MS);
         }
     };
 
@@ -266,6 +283,8 @@ public final class BleClient {
         standardBatteryMode = false;
         writeInProgress = false;
         pendingCommand = -1;
+        standardReadInProgress = false;
+        lastRawLogMs = 0;
         status("Connecting to " + device.getAddress() + "…", false);
         log("Connecting to " + device.getAddress());
         try {
@@ -317,6 +336,8 @@ public final class BleClient {
                         writeInProgress = false;
                         pendingCommand = -1;
                         handler.removeCallbacks(pollTask);
+                        standardReadInProgress = false;
+                        connectionGeneration++;
                         g.close();
                         gatt = null;
                         status("Disconnected — tap Scan to reconnect", false);
@@ -367,7 +388,10 @@ public final class BleClient {
                     ready = true;
                     handler.removeCallbacks(connectionTimeout);
                     status("Connected — standard BLE battery level", true);
-                    g.readCharacteristic(level);
+                    pollIndex = 0;
+                    standardReadInProgress = false;
+                    handler.removeCallbacks(pollTask);
+                    handler.post(pollTask);
                     return;
                 }
             }
@@ -411,13 +435,17 @@ public final class BleClient {
         }
 
         @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value, int statusCode) {
-            if (g == gatt && standardBatteryMode && BATTERY_LEVEL.equals(c.getUuid())
-                    && statusCode == BluetoothGatt.GATT_SUCCESS) publishBatteryLevel(value);
+            if (g != gatt || !standardBatteryMode || !BATTERY_LEVEL.equals(c.getUuid())) return;
+            standardReadInProgress = false;
+            if (statusCode == BluetoothGatt.GATT_SUCCESS) publishBatteryLevel(value);
+            else log("Standard Battery Service read error: " + statusCode);
         }
         @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, int statusCode) {
-            if (Build.VERSION.SDK_INT < 33 && g == gatt && standardBatteryMode
-                    && BATTERY_LEVEL.equals(c.getUuid()) && statusCode == BluetoothGatt.GATT_SUCCESS)
-                publishBatteryLevel(c.getValue());
+            if (Build.VERSION.SDK_INT >= 33 || g != gatt ||
+                    !standardBatteryMode || !BATTERY_LEVEL.equals(c.getUuid())) return;
+            standardReadInProgress = false;
+            if (statusCode == BluetoothGatt.GATT_SUCCESS) publishBatteryLevel(c.getValue());
+            else log("Standard Battery Service read error: " + statusCode);
         }
 
         @Override public void onCharacteristicChanged(BluetoothGatt g,
@@ -438,7 +466,7 @@ public final class BleClient {
                 writeInProgress = false;
                 if (status != BluetoothGatt.GATT_SUCCESS)
                     log("Telemetry request write failed: " + status);
-                if (pendingCommand >= 0) {
+                if (ready && pendingCommand >= 0) {
                     int next = pendingCommand;
                     pendingCommand = -1;
                     handler.postDelayed(() -> request(next), 180);
@@ -462,7 +490,7 @@ public final class BleClient {
         if (notifyCharacteristic == null ||
                 !notifyCharacteristic.getUuid().equals(characteristic.getUuid())) return;
         if (jbdMode) {
-            log("JBD RX " + BatteryProtocol.hex(bytes));
+            logRawPacket("JBD RX ", bytes);
             for (byte[] packet : jbdAssembler.feed(Arrays.copyOf(bytes, bytes.length))) {
                 int code = packet[1] & 0xff;
                 if (code == 0x03) {
@@ -478,7 +506,7 @@ public final class BleClient {
             return;
         }
         byte[] copy = Arrays.copyOf(bytes, bytes.length);
-        log("RX " + BatteryProtocol.hex(copy));
+        logRawPacket("RX ", copy);
         List<byte[]> packets = assembler.feed(copy);
         for (byte[] packet : packets) {
             int cmd = packet[1] & 0xFF;
@@ -496,15 +524,40 @@ public final class BleClient {
         }
     }
 
+    private void logRawPacket(String prefix, byte[] packet) {
+        // Raw packet logs are diagnostic, not needed for every 2s live update.
+        // Throttling prevents large log TextView redraws and scroll jank.
+        long now = android.os.SystemClock.elapsedRealtime();
+        if (now - lastRawLogMs >= 10000) {
+            lastRawLogMs = now;
+            log(prefix + BatteryProtocol.hex(packet));
+        }
+    }
+
+    private void readStandardBattery() {
+        if (!ready || !standardBatteryMode || gatt == null || standardReadInProgress) return;
+        BluetoothGattService svc = gatt.getService(BATTERY_SERVICE);
+        BluetoothGattCharacteristic level = svc == null ? null : svc.getCharacteristic(BATTERY_LEVEL);
+        if (level == null) return;
+        try {
+            if (gatt.readCharacteristic(level)) {
+                standardReadInProgress = true;
+                final int generation = connectionGeneration;
+                handler.postDelayed(() -> {
+                    if (generation == connectionGeneration) standardReadInProgress = false;
+                }, 2500);
+            } else log("Standard Battery Service read could not start");
+        } catch (SecurityException | IllegalStateException ex) {
+            log("Standard battery read error: " + ex.getMessage());
+        }
+    }
+
     public boolean isReady() { return ready; }
     public boolean isScanning() { return scanning; }
 
     public void refresh() {
-        if (ready && standardBatteryMode && gatt != null) {
-            BluetoothGattService svc = gatt.getService(BATTERY_SERVICE);
-            if (svc != null && svc.getCharacteristic(BATTERY_LEVEL) != null)
-                gatt.readCharacteristic(svc.getCharacteristic(BATTERY_LEVEL));
-        } else if (ready) request(0x21);
+        if (ready && standardBatteryMode) readStandardBattery();
+        else if (ready) request(jbdMode ? 0x03 : 0x21);
         else status("Connect to a BMS before refreshing", false);
     }
 
@@ -530,7 +583,7 @@ public final class BleClient {
             }
             if (result == BluetoothGatt.GATT_SUCCESS) {
                 writeInProgress = true;
-                log((jbdMode ? "JBD TX " : "TX ") + BatteryProtocol.hex(payload));
+                logRawPacket(jbdMode ? "JBD TX " : "TX ", payload);
                 if (writeType == BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE) {
                     // No write callback is guaranteed for WRITE_NO_RESPONSE GATT characteristics.
                     handler.postDelayed(() -> {
@@ -560,10 +613,12 @@ public final class BleClient {
     }
 
     public void disconnect() {
+        connectionGeneration++;
         stopScan();
         handler.removeCallbacks(pollTask);
         handler.removeCallbacks(connectionTimeout);
         ready = false;
+        standardReadInProgress = false;
         standardBatteryMode = false;
         jbdMode = false;
         notifyCharacteristic = null;
