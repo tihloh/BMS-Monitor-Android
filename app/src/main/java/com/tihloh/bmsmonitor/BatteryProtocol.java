@@ -49,6 +49,51 @@ public final class BatteryProtocol {
                 remaining / 1000.0, total / 1000.0);
     }
 
+    /**
+     * Provisional extended layout observed in a captured 0x21 Gentai/ECO frame.
+     * 26 payload bytes: standard metrics (0..17), 16-bit LE possible cycle
+     * counter (18..19), followed by six one-byte candidate temperatures (20..25).
+     *
+     * This is NOT a manufacturer-confirmed format. Values are exposed as
+     * provisional so the UI cannot imply verified protection/MOS status.
+     * Larger/shorter firmware variants are deliberately not interpreted.
+     * The two trailing bytes in the frame are NOT sensor fields.
+     */
+    public static final class GentaiDetails {
+        public final int possibleCycleCount;
+        public final int possibleHealthPercent;
+        public final double[] possibleTemperaturesC;
+
+        private GentaiDetails(int cycles, int health, double[] temperatures) {
+            possibleCycleCount = cycles;
+            possibleHealthPercent = health;
+            possibleTemperaturesC = Arrays.copyOf(temperatures, temperatures.length);
+        }
+    }
+
+    public static GentaiDetails parseGentaiDetails(byte[] frame) {
+        if (!valid(frame, 0x21) || (frame[2] & 0xFF) != 26 ||
+                parseInfo(frame) == null) return null;
+        int cycles = u16(frame, 21);        // tentative unsigned cycle counter
+        int health = frame[12] & 0xFF;     // tentative SOH percent
+        if (health > 100) health = -1;
+        double[] candidates = new double[6];
+        int found = 0;
+        for (int i = 0; i < 6; i++) {
+            int raw = frame[23 + i] & 0xFF;
+            // 0x7f/0xff and zero are common absent-sensor markers in BMS
+            // firmware. Do not display these as real measurements.
+            if (raw == 0 || raw == 0x7F || raw == 0xFF || raw > 100) {
+                candidates[i] = Double.NaN;
+            } else {
+                candidates[i] = raw;
+                found++;
+            }
+        }
+        if (found == 0 && health < 0) return null;
+        return new GentaiDetails(cycles, health, candidates);
+    }
+
     public static double[] parseCells(byte[] frame) {
         if (!valid(frame, 0x22)) return new double[0];
         List<Double> result = new ArrayList<>();
