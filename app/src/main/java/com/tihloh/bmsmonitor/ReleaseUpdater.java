@@ -6,6 +6,7 @@ import android.app.PendingIntent;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageInstaller;
+import android.content.pm.PackageInstaller.SessionInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
@@ -55,6 +56,7 @@ public final class ReleaseUpdater {
     public ReleaseUpdater(Activity activity, Callback callback) {
         this.activity = activity;
         this.callback = callback;
+        cleanupStaleSessions();
     }
 
     public void check(boolean force) {
@@ -83,7 +85,7 @@ public final class ReleaseUpdater {
                         if (force) Toast.makeText(activity, "Battery Monitor is up to date", Toast.LENGTH_SHORT).show();
                     } else {
                         callback.onMessage("Version " + newest.version + " is available.");
-                        showUpdate(newest);
+                        install(newest);
                     }
                 });
             } catch (Exception e) {
@@ -161,28 +163,21 @@ public final class ReleaseUpdater {
         return 0;
     }
 
-    private void showUpdate(Release release) {
-        String desc = "Battery Monitor " + release.version + " is available (installed: "
-                + BuildConfig.VERSION_NAME + ").\n\n"
-                + (BuildConfig.DEBUG
-                  ? "This experimental APK was built on GitHub Actions. Debug APKs may have different signing keys, so Android may require uninstalling the previous experimental build before installing this one. This app has no cloud-stored battery history."
-                  : "Android will ask you to approve the installation. Both APKs must use the same trusted signing key.");
-        new AlertDialog.Builder(activity)
-                .setTitle("Update available")
-                .setMessage(desc)
-                .setNegativeButton("Later", (dialog, which) -> { })
-                .setNeutralButton("Release notes", (dialog, which) -> {
-                    activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(release.htmlUrl)));
-                })
-                .setPositiveButton(BuildConfig.DEBUG ? "Get experimental APK" : "Install update",
-                        (dialog, which) -> {
-                            if (BuildConfig.DEBUG) {
-                                // Never attempt a PackageInstaller in-place replacement
-                                // of CI debug builds with unpredictable signing keys.
-                                activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(release.apkUrl)));
-                            } else install(release);
-                        })
-                .show();
+    /** Android manages PackageInstaller session bytes in private storage, not Downloads. */
+    private void cleanupStaleSessions() {
+        new Thread(() -> {
+            try {
+                PackageInstaller installer = activity.getPackageManager().getPackageInstaller();
+                long cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000;
+                for (SessionInfo info : installer.getMySessions()) {
+                    if (info.getCreatedMillis() < cutoff && !info.isActive()) {
+                        installer.abandonSession(info.getSessionId());
+                    }
+                }
+            } catch (Exception ignored) {
+                // Stale-session cleanup is best effort.
+            }
+        }, "BMS-update-cleanup").start();
     }
 
     private void install(Release release) {
@@ -204,7 +199,7 @@ public final class ReleaseUpdater {
         pendingPermission = null;
         if (busy) return;
         busy = true;
-        callback.onMessage("Downloading update " + release.version + "…");
+        callback.onMessage("Preparing update " + release.version + " internally…");
         new Thread(() -> downloadAndInstall(release), "BMS-apk-installer").start();
     }
 
@@ -257,17 +252,14 @@ public final class ReleaseUpdater {
                         PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_MUTABLE);
                 session.commit(pending.getIntentSender());
                 sessionId = null;
-                main.post(() -> callback.onMessage("Downloaded. Awaiting Android install confirmation…"));
+                main.post(() -> callback.onMessage("Update prepared. Android may request installation approval."));
             }
         } catch (Exception e) {
             if (sessionId != null) installer.abandonSession(sessionId);
             main.post(() -> {
                 callback.onMessage("Update failed: " + e.getMessage());
                 new AlertDialog.Builder(activity).setTitle("Update failed")
-                        .setMessage("Could not install this APK. If you have the old experimental build, "
-                                + "it may have a different signing key. "
-                                + "Uninstall that version before installing the new one.\\n\\n"
-                                + e.getMessage())
+                        .setMessage("Could not install this update. Ensure it uses the same signing certificate and a higher versionCode.\\n\\n" + e.getMessage())
                         .setPositiveButton("OK", null).show();
             });
         } finally {
