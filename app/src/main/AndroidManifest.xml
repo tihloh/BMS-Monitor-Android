@@ -13,7 +13,8 @@
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
-    <application android:allowBackup="false" android:label="BMS Monitor" android:supportsRtl="true"
+    <application android:allowBackup="false" android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher" android:roundIcon="@mipmap/ic_launcher_round" android:supportsRtl="true"
         android:theme="@style/AppTheme">
         <receiver android:name=".UpdateInstallReceiver" android:exported="false" />
         <service android:name=".UpdateJobService" android:permission="android.permission.BIND_JOB_SERVICE" android:exported="true" />

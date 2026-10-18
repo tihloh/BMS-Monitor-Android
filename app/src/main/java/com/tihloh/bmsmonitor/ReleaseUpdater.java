@@ -80,7 +80,7 @@ public final class ReleaseUpdater {
                     callback.onVersion(newest.version);
                     if (diff <= 0) {
                         callback.onMessage("You're using the latest available version.");
-                        if (force) Toast.makeText(activity, "BMS Monitor is up to date", Toast.LENGTH_SHORT).show();
+                        if (force) Toast.makeText(activity, "Battery Monitor is up to date", Toast.LENGTH_SHORT).show();
                     } else {
                         callback.onMessage("Version " + newest.version + " is available.");
                         showUpdate(newest);
@@ -162,7 +162,7 @@ public final class ReleaseUpdater {
     }
 
     private void showUpdate(Release release) {
-        String desc = "BMS Monitor " + release.version + " is available (installed: "
+        String desc = "Battery Monitor " + release.version + " is available (installed: "
                 + BuildConfig.VERSION_NAME + ").\n\n"
                 + (BuildConfig.DEBUG
                   ? "This experimental APK was built on GitHub Actions. Debug APKs may have different signing keys, so Android may require uninstalling the previous experimental build before installing this one. This app has no cloud-stored battery history."
@@ -190,7 +190,7 @@ public final class ReleaseUpdater {
             pendingPermission = release;
             new AlertDialog.Builder(activity)
                     .setTitle("Allow app updates")
-                    .setMessage("Android needs permission to install updates from BMS Monitor. "
+                    .setMessage("Android needs permission to install updates from Battery Monitor. "
                             + "Enable Allow from this source, then return here.")
                     .setPositiveButton("Open settings", (dialog, which) -> {
                         activity.startActivity(new Intent(
