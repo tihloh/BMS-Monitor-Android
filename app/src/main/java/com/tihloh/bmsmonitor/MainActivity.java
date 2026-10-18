@@ -266,7 +266,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         aboutCard.addView(text(getString(R.string.app_name), 18, NAVY, true));
         aboutCard.addView(text("Version " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")", 13, MUTED, false), below(0, 5));
         aboutCard.addView(text("Developer: Christian Bustamante", 13, NAVY, true), below(0, 6));
-        aboutCard.addView(text(BuildConfig.DEBUG ? "Channel: Development preview" : "Channel: Production", 12, MUTED, true), below(0, 4));
+        aboutCard.addView(text("App ID: com.tihloh.bmsmonitor", 12, MUTED, false), below(0, 4));
         aboutCard.addView(text("Read-only Bluetooth LE battery monitor. Updates use Android PackageInstaller; Android may require installation approval.", 12, MUTED, false), below(0, 8));
         Button source = button("GitHub releases", false);
         source.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
