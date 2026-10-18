@@ -47,6 +47,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private ReleaseUpdater updater;
     private LinearLayout deviceList, cellList, logBox, scanCard;
     private ScrollView mainScroll;
+    private LinearLayout dashboardView, connectionView, aboutView;
+    private Button dashboardTab, connectionTab, aboutTab;
+    private int currentPage = 0;
     private TextView connection, scanHint, firmwareHint, soc, status, voltage, current, power,
             remaining, capacity, updated, cellHeading, logText, totalFound;
     private Button scanButton, disconnectButton;
@@ -69,6 +72,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         onLog("Ready. Scanning requires Bluetooth/Nearby Devices permission.");
         UpdateJobService.schedule(getApplicationContext());
         boolean fromNotification = getIntent() != null && getIntent().getBooleanExtra("check_updates_now", false);
+        if (fromNotification) showPage(2);
         updater.check(fromNotification);
         if (fromNotification) getIntent().removeExtra("check_updates_now");
         // Request permission on first use only when the user taps Scan.
@@ -89,6 +93,25 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         TextView subtitle = text("GENTAI  /  LIVE BATTERY TELEMETRY", 11, CYAN, true);
         subtitle.setLetterSpacing(0.06f);
         root.addView(subtitle, below(0, 5));
+        LinearLayout tabs = horizontal();
+        dashboardTab = button("Dashboard", true);
+        connectionTab = button("Connections", false);
+        aboutTab = button("Updates & About", false);
+        tabs.addView(dashboardTab, equalButton());
+        tabs.addView(connectionTab, equalButton());
+        tabs.addView(aboutTab, equalButton());
+        dashboardTab.setOnClickListener(v -> showPage(0));
+        connectionTab.setOnClickListener(v -> showPage(1));
+        aboutTab.setOnClickListener(v -> showPage(2));
+        root.addView(tabs, below(0, 14));
+        dashboardView = vertical();
+        connectionView = vertical();
+        aboutView = vertical();
+        root.addView(dashboardView, below(0, 12));
+        root.addView(connectionView, below(0, 12));
+        root.addView(aboutView, below(0, 12));
+        connectionView.addView(text("Connection Manager", 20, NAVY, true));
+        aboutView.addView(text("Updates & About", 20, NAVY, true));
 
         LinearLayout connectionCard = panel();
         LinearLayout topLine = horizontal();
@@ -101,12 +124,12 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         connectionCard.addView(topLine);
         status = text("Connect to ECO039E to start reading.", 13, MUTED, false);
         connectionCard.addView(status, below(0, 5));
-        root.addView(connectionCard, below(0, 15));
+        dashboardView.addView(connectionCard, below(0, 15));
 
         Button gentaiConnect = button("Connect directly to ECO039E", true);
         gentaiConnect.setTextSize(15);
         gentaiConnect.setOnClickListener(v -> connectManual());
-        root.addView(gentaiConnect, below(0, 11));
+        connectionView.addView(gentaiConnect, below(0, 11));
         LinearLayout actions = horizontal();
         scanButton = button("Scan for devices", true);
         scanButton.setOnClickListener(v -> beginScan());
@@ -118,7 +141,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         });
         actions.addView(scanButton, equalButton());
         actions.addView(disconnectButton, equalButton());
-        root.addView(actions, below(0, 10));
+        connectionView.addView(actions, below(0, 10));
 
         scanCard = panel();
         LinearLayout scanRow = horizontal();
@@ -163,7 +186,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         directRow.addView(manualConnect, new LinearLayout.LayoutParams(dp(98), dp(44)));
         scanCard.addView(text("DIRECT BLE CONNECTION · Bypass scanning with the BMS address shown by nRF Connect:", 12, MUTED, true), below(0, 10));
         scanCard.addView(directRow, below(0, 5));
-        root.addView(scanCard, below(0, 10));
+        connectionView.addView(scanCard, below(0, 10));
 
         LinearLayout socPanel = panel();
         socPanel.addView(text("STATE OF CHARGE", 11, MUTED, true));
@@ -171,24 +194,24 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         socPanel.addView(soc, below(0, 5));
         updated = text("No readings received yet", 12, MUTED, false);
         socPanel.addView(updated);
-        root.addView(socPanel, below(0, 15));
+        dashboardView.addView(socPanel, below(0, 15));
 
         LinearLayout metrics1 = horizontal();
         LinearLayout voltsCard = metric("TOTAL VOLTAGE", "-- V"); voltage = (TextView) voltsCard.getChildAt(1);
         LinearLayout a = metric("CURRENT", "-- A"); current = (TextView) a.getChildAt(1);
         metrics1.addView(voltsCard, equalCard()); metrics1.addView(a, equalCard());
-        root.addView(metrics1, below(0, 9));
+        dashboardView.addView(metrics1, below(0, 9));
 
         LinearLayout metrics2 = horizontal();
         LinearLayout w = metric("POWER", "-- W"); power = (TextView) w.getChildAt(1);
         LinearLayout ah = metric("REMAINING", "-- Ah"); remaining = (TextView) ah.getChildAt(1);
         metrics2.addView(w, equalCard()); metrics2.addView(ah, equalCard());
-        root.addView(metrics2, below(0, 9));
+        dashboardView.addView(metrics2, below(0, 9));
 
         LinearLayout more = panel();
         capacity = text("Rated capacity: -- Ah", 14, NAVY, true);
         more.addView(capacity);
-        root.addView(more, below(0, 9));
+        dashboardView.addView(more, below(0, 9));
 
         LinearLayout cells = panel();
         cellHeading = text("Individual cell voltages", 15, NAVY, true);
@@ -196,7 +219,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         cellList = vertical();
         cellList.addView(text("Awaiting a supported response from the BMS.", 12, MUTED, false));
         cells.addView(cellList, below(0, 9));
-        root.addView(cells, below(0, 10));
+        dashboardView.addView(cells, below(0, 10));
 
         LinearLayout updatePanel = panel();
         updatePanel.addView(text("App updates", 15, NAVY, true));
@@ -216,7 +239,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             });
             updatePanel.addView(alerts, below(0, 6));
         }
-        root.addView(updatePanel, below(0, 10));
+        aboutView.addView(updatePanel, below(0, 10));
 
         logBox = panel();
         LinearLayout logHeader = horizontal();
@@ -237,11 +260,35 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         logText.setTextIsSelectable(true);
         logText.setMaxLines(10);
         logBox.addView(logText);
-        root.addView(logBox, below(0, 10));
+        connectionView.addView(logBox, below(0, 10));
 
         TextView footer = text("Experimental read-only monitor. Not a battery protection system.", 11, MUTED, false);
         footer.setGravity(Gravity.CENTER);
-        root.addView(footer, below(0, 15));
+        LinearLayout aboutCard = panel();
+        aboutCard.addView(text(getString(R.string.app_name), 18, NAVY, true));
+        aboutCard.addView(text("Version " + BuildConfig.VERSION_NAME + " (" + BuildConfig.VERSION_CODE + ")", 13, MUTED, false), below(0, 5));
+        aboutCard.addView(text("Read-only Bluetooth LE battery monitor. Updates use Android PackageInstaller; Android may require installation approval.", 12, MUTED, false), below(0, 8));
+        Button source = button("GitHub releases", false);
+        source.setOnClickListener(v -> startActivity(new Intent(Intent.ACTION_VIEW,
+                android.net.Uri.parse("https://github.com/tihloh/BMS-Monitor-Android/releases"))));
+        aboutCard.addView(source, below(0, 9));
+        aboutView.addView(aboutCard, below(0, 10));
+        aboutView.addView(footer, below(0, 15));
+        showPage(currentPage);
+    }
+
+    private void showPage(int page) {
+        currentPage = page;
+        dashboardView.setVisibility(page == 0 ? View.VISIBLE : View.GONE);
+        connectionView.setVisibility(page == 1 ? View.VISIBLE : View.GONE);
+        aboutView.setVisibility(page == 2 ? View.VISIBLE : View.GONE);
+        Button[] tabs = {dashboardTab, connectionTab, aboutTab};
+        for (int i = 0; i < tabs.length; i++) {
+            boolean selected = i == page;
+            tabs[i].setTextColor(selected ? Color.WHITE : NAVY);
+            tabs[i].setBackground(background(selected ? CYAN : Color.rgb(232, 240, 244), 11, 0));
+        }
+        if (mainScroll != null) mainScroll.smoothScrollTo(0, 0);
     }
 
     /** Requires complete BLE scan privileges; no physical location data is collected. */
@@ -325,8 +372,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
                 + ": Nearby devices / Location permissions granted, Bluetooth and Location ON");
         ble.scan();
-        if (mainScroll != null && scanCard != null) mainScroll.post(() ->
-                mainScroll.smoothScrollTo(0, scanCard.getTop()));
+
     }
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
@@ -371,6 +417,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         setIntent(intent);
         if (intent != null && intent.getBooleanExtra("check_updates_now", false) && updater != null) {
             intent.removeExtra("check_updates_now");
+            showPage(2);
             updater.check(true);
         }
     }
