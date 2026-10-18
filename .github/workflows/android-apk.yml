@@ -39,81 +39,63 @@ jobs:
           SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" -type f -name sdkmanager | head -n 1)
           test -n "$SDKMANAGER" || (echo "Android sdkmanager not found" && exit 1)
           "$SDKMANAGER" --sdk_root="$ANDROID_HOME" "platforms;android-35" "build-tools;35.0.0"
-      - name: Generate unique version for every build
+      - name: Set unique Android version
         run: |
           echo "VERSION_NAME=0.4.${GITHUB_RUN_NUMBER}" >> "$GITHUB_ENV"
           echo "VERSION_CODE=$((10000 + GITHUB_RUN_NUMBER))" >> "$GITHUB_ENV"
-      - name: Test
-        run: gradle --no-daemon :app:testDebugUnitTest
-      - name: Select release channel
+      - name: Test and compile
+        run: |
+          gradle --no-daemon :app:testDebugUnitTest :app:assembleDebug \
+            -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
+      - name: Verify uniform application ID
+        run: |
+          APK="app/build/outputs/apk/debug/app-debug.apk"
+          PKG=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")
+          test "$PKG" = "com.tihloh.bmsmonitor" || {
+            echo "::error::Unexpected debug package ID: $PKG"
+            exit 1
+          }
+      - name: Require permanent signing for publishable APKs
         if: github.event_name != 'pull_request'
         run: |
-          if [[ -n "$KEYSTORE_B64" && -n "$STORE_PASSWORD" && -n "$KEY_ALIAS" && -n "$KEY_PASSWORD" ]]; then
-            echo "HAS_SIGNING=true" >> "$GITHUB_ENV"
-            echo "Production signing configured."
-          else
-            echo "HAS_SIGNING=false" >> "$GITHUB_ENV"
-            echo "::warning::No production signing secrets. Publishing development prerelease only."
+          if [[ -z "$KEYSTORE_B64" || -z "$STORE_PASSWORD" || -z "$KEY_ALIAS" || -z "$KEY_PASSWORD" ]]; then
+            echo "::error::Production APK not published. Configure the four ANDROID_KEYSTORE_* repository secrets. Never publish a new ephemeral debug key as an update."
+            exit 1
           fi
-      - name: Build production-signed APK
-        if: github.event_name != 'pull_request' && env.HAS_SIGNING == 'true'
+      - name: Build with one permanent signing key
+        if: github.event_name != 'pull_request'
         run: |
-          echo "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/bms-release.jks"
+          printf '%s' "$KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/bms-release.jks"
           chmod 600 "$RUNNER_TEMP/bms-release.jks"
           gradle --no-daemon :app:assembleRelease \
             -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE" \
             -PSIGNING_STORE_FILE="$RUNNER_TEMP/bms-release.jks" \
             -PSIGNING_STORE_PASSWORD="$STORE_PASSWORD" \
             -PSIGNING_KEY_ALIAS="$KEY_ALIAS" -PSIGNING_KEY_PASSWORD="$KEY_PASSWORD"
-          echo "APK_PATH=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
-          echo "SIGNED=true" >> "$GITHUB_ENV"
-      - name: Build isolated development APK
-        if: github.event_name != 'pull_request' && env.HAS_SIGNING != 'true'
+      - name: Verify production APK before publishing
+        if: github.event_name != 'pull_request'
         run: |
-          gradle --no-daemon :app:assembleDebug -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
-          echo "APK_PATH=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
-          echo "SIGNED=false" >> "$GITHUB_ENV"
-      - name: Verify production APK signature and package
-        if: github.event_name != 'pull_request' && env.HAS_SIGNING == 'true'
-        run: |
-          APK="$APK_PATH"
+          APK="app/build/outputs/apk/release/app-release.apk"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep "name='com.tihloh.bmsmonitor'"
-          echo "Production APK verified"
-
-      - name: Verify development APK before publication
-        if: github.event_name != 'pull_request' && env.HAS_SIGNING != 'true'
-        run: |
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK_PATH"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK_PATH" | grep "name='com.tihloh.bmsmonitor.debug'"
-          echo "Verified isolated development APK"
-
-      - name: Build pull request test APK
-        if: github.event_name == 'pull_request'
-        run: |
-          gradle --no-daemon :app:assembleDebug -PVERSION_NAME="$VERSION_NAME" -PVERSION_CODE="$VERSION_CODE"
-          echo "APK_PATH=app/build/outputs/apk/debug/app-debug.apk" >> "$GITHUB_ENV"
-          echo "SIGNED=false" >> "$GITHUB_ENV"
-      - name: Upload build artifact
+          PKG=$("$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | sed -n "s/^package: name='\\([^']*\\)'.*/\\1/p")
+          test "$PKG" = "com.tihloh.bmsmonitor" || {
+            echo "::error::Unexpected production package ID: $PKG"
+            exit 1
+          }
+      - name: Upload production APK build artifact
+        if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@v4
         with:
-          name: Battery-Monitor-APK
-          path: ${{ env.APK_PATH }}
+          name: Battery-Monitor-v${{ env.VERSION_NAME }}
+          path: app/build/outputs/apk/release/app-release.apk
           if-no-files-found: error
-      - name: Publish a versioned release for every main update
+      - name: Publish signed GitHub Release after every successful main update
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         run: |
           TAG="v$VERSION_NAME"
-          if [[ "$SIGNED" == "true" ]]; then
-            OUTPUT="Battery-Monitor-$TAG.apk"
-            NOTES="Production-signed APK. In-place updates require this permanent signing identity."
-            FLAGS=()
-          else
-            OUTPUT="Battery-Monitor-$TAG-dev.apk"
-            NOTES="Development preview only. Uses com.tihloh.bmsmonitor.debug and an ephemeral runner debug signing key. Not a production app update and may not update previous dev installations."
-            FLAGS=(--prerelease)
-          fi
-          cp "$APK_PATH" "$OUTPUT"
-          gh release create "$TAG" "$OUTPUT" --title "Battery Monitor $TAG" \
-            --notes "$NOTES Version code: $VERSION_CODE. Commit: $GITHUB_SHA." \
-            "${FLAGS[@]}" --target "$GITHUB_SHA"
+          OUTPUT="Battery-Monitor-$TAG.apk"
+          cp app/build/outputs/apk/release/app-release.apk "$OUTPUT"
+          gh release create "$TAG" "$OUTPUT" \
+            --title "Battery Monitor $TAG" \
+            --notes "Production update for com.tihloh.bmsmonitor. versionCode $VERSION_CODE. A matching installed signing certificate is required for in-place updates. Commit: $GITHUB_SHA." \
+            --target "$GITHUB_SHA"
