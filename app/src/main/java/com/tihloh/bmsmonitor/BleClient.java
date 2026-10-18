@@ -32,12 +32,15 @@ public final class BleClient {
         void onScanFinished();
         void onInfo(BatteryProtocol.BatteryInfo info);
         void onCells(double[] voltages);
+        void onBatteryLevel(int percent);
         void onLog(String entry);
     }
 
     private static final UUID SERVICE = UUID.fromString("00000001-0000-1000-8000-00805f9b34fb");
     private static final UUID WRITE = UUID.fromString("00000002-0000-1000-8000-00805f9b34fb");
     private static final UUID NOTIFY = UUID.fromString("00000003-0000-1000-8000-00805f9b34fb");
+    private static final UUID BATTERY_SERVICE = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb");
+    private static final UUID BATTERY_LEVEL = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb");
     private static final UUID CCCD = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb");
 
     private final Context context;
@@ -50,6 +53,7 @@ public final class BleClient {
     private BluetoothGatt gatt;
     private BluetoothGattCharacteristic writer;
     private volatile boolean ready;
+    private boolean standardBatteryMode;
     private int discoveredCount;
     private volatile boolean scanning;
     private boolean legacyScanning;
@@ -250,6 +254,7 @@ public final class BleClient {
         stopScan();
         disconnect();
         assembler.reset();
+        standardBatteryMode = false;
         writeInProgress = false;
         pendingCommand = -1;
         status("Connecting to " + device.getAddress() + "…", false);
@@ -317,7 +322,19 @@ public final class BleClient {
             BluetoothGattService service = g.getService(SERVICE);
             if (service == null) {
                 log("This device does not expose the supported 0001 service");
-                status("Unsupported BLE device (service 0001 missing)", false);
+                BluetoothGattService standard = g.getService(BATTERY_SERVICE);
+                BluetoothGattCharacteristic level = standard == null ? null : standard.getCharacteristic(BATTERY_LEVEL);
+                if (level == null) {
+                    for (BluetoothGattService detected : g.getServices())
+                        log("GATT service: " + detected.getUuid());
+                    status("Connected, but device telemetry protocol is not supported yet", false);
+                    return;
+                }
+                standardBatteryMode = true;
+                ready = true;
+                handler.removeCallbacks(connectionTimeout);
+                status("Connected — standard BLE battery level", true);
+                g.readCharacteristic(level);
                 return;
             }
             writer = service.getCharacteristic(WRITE);
@@ -363,6 +380,16 @@ public final class BleClient {
             });
         }
 
+        @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, byte[] value, int statusCode) {
+            if (g == gatt && standardBatteryMode && BATTERY_LEVEL.equals(c.getUuid())
+                    && statusCode == BluetoothGatt.GATT_SUCCESS) publishBatteryLevel(value);
+        }
+        @Override public void onCharacteristicRead(BluetoothGatt g, BluetoothGattCharacteristic c, int statusCode) {
+            if (Build.VERSION.SDK_INT < 33 && g == gatt && standardBatteryMode
+                    && BATTERY_LEVEL.equals(c.getUuid()) && statusCode == BluetoothGatt.GATT_SUCCESS)
+                publishBatteryLevel(c.getValue());
+        }
+
         @Override public void onCharacteristicChanged(BluetoothGatt g,
                 BluetoothGattCharacteristic characteristic, byte[] value) {
             processNotification(g, characteristic, value);
@@ -390,8 +417,19 @@ public final class BleClient {
         }
     };
 
+    private void publishBatteryLevel(byte[] bytes) {
+        if (bytes == null || bytes.length == 0) return;
+        int percent = bytes[0] & 0xFF;
+        if (percent <= 100) handler.post(() -> listener.onBatteryLevel(percent));
+    }
+
     private void processNotification(BluetoothGatt g, BluetoothGattCharacteristic characteristic, byte[] bytes) {
-        if (g != gatt || !NOTIFY.equals(characteristic.getUuid()) || bytes == null) return;
+        if (g != gatt || bytes == null) return;
+        if (standardBatteryMode && BATTERY_LEVEL.equals(characteristic.getUuid())) {
+            publishBatteryLevel(bytes);
+            return;
+        }
+        if (!NOTIFY.equals(characteristic.getUuid())) return;
         byte[] copy = Arrays.copyOf(bytes, bytes.length);
         log("RX " + BatteryProtocol.hex(copy));
         List<byte[]> packets = assembler.feed(copy);
@@ -415,7 +453,11 @@ public final class BleClient {
     public boolean isScanning() { return scanning; }
 
     public void refresh() {
-        if (ready) request(0x21);
+        if (ready && standardBatteryMode && gatt != null) {
+            BluetoothGattService svc = gatt.getService(BATTERY_SERVICE);
+            if (svc != null && svc.getCharacteristic(BATTERY_LEVEL) != null)
+                gatt.readCharacteristic(svc.getCharacteristic(BATTERY_LEVEL));
+        } else if (ready) request(0x21);
         else status("Connect to a BMS before refreshing", false);
     }
 
@@ -450,6 +492,7 @@ public final class BleClient {
         handler.removeCallbacks(pollTask);
         handler.removeCallbacks(connectionTimeout);
         ready = false;
+        standardBatteryMode = false;
         writer = null;
         writeInProgress = false;
         pendingCommand = -1;
