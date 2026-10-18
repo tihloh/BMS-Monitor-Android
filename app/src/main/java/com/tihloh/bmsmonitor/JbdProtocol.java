@@ -3,6 +3,7 @@ package com.tihloh.bmsmonitor;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
 
 /** Read-only JBD / Jiabaida / Xiaoxiang UART-over-BLE protocol (0xFF00 GATT). */
 public final class JbdProtocol {
@@ -10,8 +11,8 @@ public final class JbdProtocol {
 
     /** Only read-only commands are supported; no MOS, settings, or balancing writes. */
     public static byte[] request(int command) {
-        if (command != 0x03 && command != 0x04)
-            throw new IllegalArgumentException("Only JBD telemetry registers 03/04 may be read");
+        if (command != 0x03 && command != 0x04 && command != 0x05)
+            throw new IllegalArgumentException("Only documented JBD read-only registers 03/04/05 may be read");
         int check = (-command) & 0xffff;
         return new byte[] {(byte) 0xdd, (byte) 0xa5, (byte) command, 0,
                 (byte) (check >>> 8), (byte) check, 0x77};
@@ -43,6 +44,114 @@ public final class JbdProtocol {
                 soc > 100 || total == 0 || remaining > total * 2L) return null;
         return new BatteryProtocol.BatteryInfo(voltage / 100.0, current / 100.0,
                 soc, remaining / 100.0, total / 100.0);
+    }
+
+    /** Additional fields documented in the standard JBD/Xiaoxiang basic-info register. */
+    public static final class Details {
+        public final int cycleCount;
+        public final String manufactureDate;
+        public final String softwareVersion;
+        public final int cellCount;
+        public final boolean chargeMosOn, dischargeMosOn;
+        public final long balancingMask;
+        public final int protectionFlags;
+        public final double[] temperaturesC;
+
+        private Details(int cycles, String manufactureDate, String firmware, int cells,
+                        boolean chargeMos, boolean dischargeMos, long balance, int faults,
+                        double[] temperatures) {
+            this.cycleCount = cycles;
+            this.manufactureDate = manufactureDate;
+            this.softwareVersion = firmware;
+            this.cellCount = cells;
+            this.chargeMosOn = chargeMos;
+            this.dischargeMosOn = dischargeMos;
+            this.balancingMask = balance;
+            this.protectionFlags = faults;
+            this.temperaturesC = Arrays.copyOf(temperatures, temperatures.length);
+        }
+
+        public String activeBalancingCells() {
+            if (balancingMask == 0) return "None active";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < Math.min(32, cellCount); i++) {
+                if ((balancingMask & (1L << i)) != 0) {
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(i + 1);
+                }
+            }
+            return sb.length() == 0 ? "Balancing flags outside reported cell count" : "Cell " + sb;
+        }
+
+        public String protectionSummary() {
+            if (protectionFlags == 0) return "No active protection flags";
+            String[] labels = {
+                    "Cell overvoltage", "Cell undervoltage",
+                    "Pack overvoltage", "Pack undervoltage",
+                    "Charge overtemperature", "Charge undertemperature",
+                    "Discharge overtemperature", "Discharge undertemperature",
+                    "Charge overcurrent", "Discharge overcurrent",
+                    "Short circuit", "Analog front-end fault",
+                    "FET configuration lock", "Protection bit 13",
+                    "Protection bit 14", "Protection bit 15"
+            };
+            StringBuilder sb = new StringBuilder();
+            for (int bit = 0; bit < 16; bit++) {
+                if ((protectionFlags & (1 << bit)) != 0) {
+                    if (sb.length() > 0) sb.append(", ");
+                    sb.append(labels[bit]);
+                }
+            }
+            return sb.toString();
+        }
+    }
+
+    /** 03: cycles, MOS states, protection/balancing flags and NTC temperatures. */
+    public static Details parseDetails(byte[] frame) {
+        if (!valid(frame, 0x03)) return null;
+        int length = frame[3] & 0xff;
+        if (length < 22) return null;
+        int cells = frame[4 + 20] & 0xff;
+        int count = frame[4 + 21] & 0xff;
+        if (cells < 1 || cells > 32 || count > 16 || length < 22 + count * 2)
+            return null;
+        int cycles = u16(frame, 4 + 8);
+        int date = u16(frame, 4 + 10);
+        int year = 2000 + ((date >>> 9) & 0x7f);
+        int month = (date >>> 5) & 0x0f;
+        int day = date & 0x1f;
+        String manufactured = month >= 1 && month <= 12 && day >= 1 && day <= 31
+                ? String.format(Locale.US, "%04d-%02d-%02d", year, month, day)
+                : "Unavailable";
+        int firmware = frame[4 + 17] & 0xff;
+        String version = String.format(Locale.US, "%d.%d", firmware >>> 4, firmware & 0xf);
+        long balance = (u16(frame, 4 + 12) & 0xffffL)
+                | ((long) u16(frame, 4 + 14) << 16);
+        int faults = u16(frame, 4 + 16);
+        int mos = frame[4 + 19] & 0xff;
+        double[] temps = new double[count];
+        for (int i = 0; i < count; i++) {
+            int raw = u16(frame, 4 + 22 + 2 * i);
+            double c = raw / 10.0 - 273.15;
+            if (raw < 1800 || raw > 4000) return null;
+            temps[i] = c;
+        }
+        return new Details(cycles, manufactured, version, cells,
+                (mos & 1) != 0, (mos & 2) != 0, balance, faults, temps);
+    }
+
+    /** Register 05 is often a length-prefixed device-name string; variant responses are ignored. */
+    public static String parseDeviceName(byte[] frame) {
+        if (!valid(frame, 0x05)) return null;
+        int len = frame[3] & 0xff;
+        if (len < 2) return null;
+        int stringLength = frame[4] & 0xff;
+        if (stringLength < 1 || stringLength > len - 1 || stringLength > 48) return null;
+        for (int i = 5; i < 5 + stringLength; i++) {
+            int b = frame[i] & 0xff;
+            if (b < 32 || b > 126) return null;
+        }
+        return new String(frame, 5, stringLength, java.nio.charset.StandardCharsets.US_ASCII).trim();
     }
 
     /** 04: each adjacent big-endian pair encodes cell voltage in millivolts. */
