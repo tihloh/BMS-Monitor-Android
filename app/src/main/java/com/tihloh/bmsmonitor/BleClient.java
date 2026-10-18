@@ -31,6 +31,9 @@ public final class BleClient {
         void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms);
         void onScanFinished();
         void onInfo(BatteryProtocol.BatteryInfo info);
+        void onDetails(JbdProtocol.Details details);
+        void onProtocol(String protocol);
+        void onDeviceIdentity(String name);
         void onCells(double[] voltages);
         void onBatteryLevel(int percent);
         void onLog(String entry);
@@ -59,6 +62,7 @@ public final class BleClient {
     private volatile boolean ready;
     private boolean standardBatteryMode;
     private boolean jbdMode;
+    private boolean identityRequested;
     private BluetoothGattCharacteristic notifyCharacteristic;
     private int discoveredCount;
     private volatile boolean scanning;
@@ -279,6 +283,7 @@ public final class BleClient {
         assembler.reset();
         jbdAssembler.reset();
         jbdMode = false;
+        identityRequested = false;
         notifyCharacteristic = null;
         standardBatteryMode = false;
         writeInProgress = false;
@@ -388,6 +393,7 @@ public final class BleClient {
                     ready = true;
                     handler.removeCallbacks(connectionTimeout);
                     status("Connected — standard BLE battery level", true);
+                    handler.post(() -> { if (g == gatt) listener.onProtocol("Standard BLE Battery Service"); });
                     pollIndex = 0;
                     standardReadInProgress = false;
                     handler.removeCallbacks(pollTask);
@@ -395,6 +401,8 @@ public final class BleClient {
                     return;
                 }
             }
+            final String profile = jbdMode ? "JBD / Xiaoxiang" : "Gentai / ECO";
+            handler.post(() -> { if (g == gatt) listener.onProtocol(profile); });
             notifyCharacteristic = notifications;
             if (!g.setCharacteristicNotification(notifications, true)) {
                 status("Could not enable BLE notifications", false);
@@ -495,12 +503,32 @@ public final class BleClient {
                 int code = packet[1] & 0xff;
                 if (code == 0x03) {
                     BatteryProtocol.BatteryInfo info = JbdProtocol.parseInfo(packet);
-                    if (info != null) handler.post(() -> listener.onInfo(info));
-                    else log("Invalid JBD basic telemetry frame");
+                    if (info != null) {
+                        handler.post(() -> { if (g == gatt) listener.onInfo(info); });
+                        JbdProtocol.Details details = JbdProtocol.parseDetails(packet);
+                        if (details != null) handler.post(() -> {
+                            if (g == gatt) listener.onDetails(details);
+                        });
+                        if (!identityRequested) {
+                            identityRequested = true;
+                            final int generation = connectionGeneration;
+                            handler.postDelayed(() -> {
+                                if (ready && jbdMode && generation == connectionGeneration)
+                                    request(0x05);
+                            }, 750);
+                        }
+                    } else log("Invalid JBD basic telemetry frame");
                 } else if (code == 0x04) {
                     double[] cells = JbdProtocol.parseCells(packet);
-                    if (cells.length > 0) handler.post(() -> listener.onCells(cells));
+                    if (cells.length > 0) handler.post(() -> {
+                        if (g == gatt) listener.onCells(cells);
+                    });
                     else log("Invalid JBD cell telemetry frame");
+                } else if (code == 0x05) {
+                    String name = JbdProtocol.parseDeviceName(packet);
+                    if (name != null && !name.isEmpty())
+                        handler.post(() -> { if (g == gatt) listener.onDeviceIdentity(name); });
+                    else log("JBD device name not provided in standard register-05 format");
                 }
             }
             return;
@@ -621,6 +649,7 @@ public final class BleClient {
         standardReadInProgress = false;
         standardBatteryMode = false;
         jbdMode = false;
+        identityRequested = false;
         notifyCharacteristic = null;
         jbdAssembler.reset();
         writer = null;
