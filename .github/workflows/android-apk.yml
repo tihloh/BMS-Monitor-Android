@@ -64,6 +64,14 @@ jobs:
             -PSIGNING_KEY_ALIAS="$KEY_ALIAS" -PSIGNING_KEY_PASSWORD="$KEY_PASSWORD"
           echo "APK_PATH=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_ENV"
           echo "SIGNED=true" >> "$GITHUB_ENV"
+      - name: Verify production APK signature and package
+        if: github.event_name != 'pull_request'
+        run: |
+          APK="$APK_PATH"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | grep "name='com.tihloh.bmsmonitor'"
+          echo "Production APK verified"
+
       - name: Build pull request test APK
         if: github.event_name == 'pull_request'
         run: |
@@ -81,9 +89,8 @@ jobs:
         run: |
           TAG="v$VERSION_NAME"
           OUTPUT="Battery-Monitor-$TAG.apk"
-          RELEASE_FLAGS=()
           NOTES="Production-signed APK. Install upgrades only from releases signed with the same permanent key."
           cp "$APK_PATH" "$OUTPUT"
           gh release create "$TAG" "$OUTPUT" --title "Battery Monitor $TAG" \
             --notes "$NOTES Version code: $VERSION_CODE. Commit: $GITHUB_SHA." \
-            "${RELEASE_FLAGS[@]}" --target "$GITHUB_SHA"
+            --target "$GITHUB_SHA"
