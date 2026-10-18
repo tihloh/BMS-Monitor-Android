@@ -90,7 +90,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
         TextView title = text(getString(R.string.app_name), 25, NAVY, true);
         root.addView(title);
-        TextView subtitle = text("GENTAI  /  LIVE BATTERY TELEMETRY", 11, CYAN, true);
+        TextView subtitle = text("UNIVERSAL BLE BATTERY MONITOR", 11, CYAN, true);
         subtitle.setLetterSpacing(0.06f);
         root.addView(subtitle, below(0, 5));
         LinearLayout tabs = horizontal();
@@ -122,11 +122,11 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         version.setGravity(Gravity.END | Gravity.CENTER_VERTICAL);
         topLine.addView(version);
         connectionCard.addView(topLine);
-        status = text("Connect to ECO039E to start reading.", 13, MUTED, false);
+        status = text("Choose a Bluetooth device in Connections.", 13, MUTED, false);
         connectionCard.addView(status, below(0, 5));
         dashboardView.addView(connectionCard, below(0, 15));
 
-        Button gentaiConnect = button("Connect directly to ECO039E", true);
+        Button gentaiConnect = button("Connect to saved BLE address", true);
         gentaiConnect.setTextSize(15);
         gentaiConnect.setOnClickListener(v -> connectManual());
         connectionView.addView(gentaiConnect, below(0, 11));
@@ -174,7 +174,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setSingleLine(true);
         manualMac.setTextSize(13);
         manualMac.setHint("BLE address (XX:XX:XX:XX:XX:XX)");
-        manualMac.setText(getPreferences(0).getString("last_bms", "0B:23:EB:D7:03:9E"));
+        manualMac.setText(getPreferences(0).getString("last_bms", ""));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
         manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
@@ -184,7 +184,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         Button manualConnect = button("Direct", true);
         manualConnect.setOnClickListener(v -> connectManual());
         directRow.addView(manualConnect, new LinearLayout.LayoutParams(dp(98), dp(44)));
-        scanCard.addView(text("DIRECT BLE CONNECTION · Bypass scanning with the BMS address shown by nRF Connect:", 12, MUTED, true), below(0, 10));
+        scanCard.addView(text("DIRECT BLE CONNECTION · Enter a compatible BLE device address:", 12, MUTED, true), below(0, 10));
         scanCard.addView(directRow, below(0, 5));
         connectionView.addView(scanCard, below(0, 10));
 
@@ -306,7 +306,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         }
         if (!missing.isEmpty()) {
             scanHint.setText("Grant Nearby devices and PRECISE Location. Android may otherwise return no BLE results.");
-            status.setText("Permission needed to discover the Gentai BMS.");
+            status.setText("Bluetooth permissions needed to scan.");
             requestPermissions(missing.toArray(new String[0]), PERMISSIONS);
             return;
         }
@@ -347,7 +347,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         if (!ble.bluetoothEnabled()) {
             pendingDirectConnection = true;
             startActivityForResult(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE), BLUETOOTH_ENABLE);
-            status.setText("Enable Bluetooth to connect to ECO039E.");
+            status.setText("Enable Bluetooth to connect.");
             return;
         }
         pendingDirectConnection = false;
@@ -366,7 +366,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scanButton.setText("Scanning…");
         scanButton.setEnabled(false);
         progress.setVisibility(View.VISIBLE);
-        totalFound.setText("Looking for Gentai BMS…");
+        totalFound.setText("Looking for BLE devices…");
         scanHint.setText("Scanning all Bluetooth LE devices for up to 20 seconds; if no results after 8 seconds, a compatibility scan will run.");
         status.setText("Looking for nearby Bluetooth devices…");
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
@@ -408,7 +408,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 if (pendingDirectConnection) connectManual();
                 else beginScan();
             }
-            else status.setText("Bluetooth must be enabled to detect ECO039E.");
+            else status.setText("Bluetooth must be enabled to scan.");
         }
     }
 
@@ -487,7 +487,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 scanHint.setText("No BLE devices reported after both scan methods. Verify Nearby devices and precise Location permissions, turn ON Location, or enter the BMS address and tap Direct.");
                 status.setText("No Bluetooth LE advertisements received.");
             } else if (!ble.isReady() && deviceList.getChildCount() > 0) {
-                scanHint.setText("Select ECO039E or BMC1_039E from the results. If missing, rescan closer to the battery.");
+                scanHint.setText("Select a compatible battery device, or rescan closer to it.");
             }
         });
     }
@@ -502,6 +502,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             capacity.setText(String.format(Locale.US, "Rated capacity: %.1f Ah", b.totalAh));
             String condition = b.currentA < -0.03 ? "Discharging" : b.currentA > 0.03 ? "Charging" : "Idle";
             updated.setText(condition + "  •  Updated " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date()));
+        });
+    }
+
+    @Override public void onBatteryLevel(int percent) {
+        runOnUiThread(() -> {
+            soc.setText(percent + " %");
+            updated.setText("Standard Bluetooth Battery Service · SOC only");
         });
     }
 
