@@ -88,7 +88,6 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private boolean autoDiscoveryActive;
     private boolean autoDirectAttempted;
     private boolean manualDisconnect;
-    private boolean initialAutoStartDone;
     private int reconnectRetries;
     private String autoReconnectAddress = "";
     private final Handler autoConnectHandler = new Handler(Looper.getMainLooper());
@@ -433,7 +432,6 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private void beginAutomaticDiscovery() {
         if (manualDisconnect || ble == null || ble.isReady()) return;
         if (ble.isScanning()) return;
-        if (!initialAutoStartDone) initialAutoStartDone = true;
         autoReconnectAddress = getPreferences(0).getString("last_bms", "");
         autoDiscoveryActive = true;
         autoDirectAttempted = false;
@@ -528,7 +526,16 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
                 + ": Nearby devices / Location permissions granted, Bluetooth and Location ON");
         ble.scan();
-
+        if (autoDiscoveryActive && !autoReconnectAddress.isEmpty()) {
+            // Wait for actual advertisements (including legacy scan fallback) before
+            // trying a direct connection. Limit startup delay if the BMS is hidden.
+            autoConnectHandler.postDelayed(() -> {
+                if (autoDiscoveryActive && !connecting && ble.isScanning()) {
+                    onLog("Last BMS not advertised after 12 seconds; trying saved address");
+                    ble.stopScan(); // onScanFinished performs the direct fallback.
+                }
+            }, 12000);
+        }
     }
 
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
