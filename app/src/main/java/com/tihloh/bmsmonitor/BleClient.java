@@ -278,7 +278,30 @@ public final class BleClient {
         }
     }
 
+    /** The active link's address, reported only when telemetry is ready. */
+    public String connectedAddress() {
+        if (!ready || gatt == null) return null;
+        try {
+            BluetoothDevice device = gatt.getDevice();
+            return device == null ? null : device.getAddress();
+        } catch (SecurityException exception) {
+            return null;
+        }
+    }
+
     public void connect(BluetoothDevice device) {
+        if (device == null) return;
+        // A duplicate connect request must not tear down a working GATT link.
+        if (gatt != null) {
+            try {
+                BluetoothDevice current = gatt.getDevice();
+                if (current != null && current.getAddress().equalsIgnoreCase(device.getAddress())) {
+                    log(ready ? "Already connected to this BMS" : "BLE connection already in progress");
+                    if (ready) status("Connected — battery telemetry active", true);
+                    return;
+                }
+            } catch (SecurityException ignored) { }
+        }
         stopScan();
         disconnect();
         assembler.reset();
