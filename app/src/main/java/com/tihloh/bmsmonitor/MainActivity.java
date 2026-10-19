@@ -88,11 +88,16 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private boolean autoDiscoveryActive;
     private boolean autoDirectAttempted;
     private boolean manualDisconnect;
+    // True while the user is scanning for or choosing a different BMS.
+    // This always takes precedence over saved-device recovery.
+    private boolean userConnectionOverride;
+    private String requestedDeviceAddress = "";
     private int reconnectRetries;
     private String autoReconnectAddress = "";
     private final Handler autoConnectHandler = new Handler(Looper.getMainLooper());
     private final Runnable reconnectTask = () -> {
-        if (!manualDisconnect && ble != null && !ble.isReady()) {
+        if (!manualDisconnect && !userConnectionOverride
+                && !connecting && ble != null && !ble.isReady()) {
             beginAutomaticDiscovery();
         }
     };
@@ -172,15 +177,13 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout actions = horizontal();
         scanButton = button("Scan for devices", true);
         scanButton.setOnClickListener(v -> {
-            autoDiscoveryActive = false; // Manual scan must never auto-switch an active BMS.
-            autoConnectHandler.removeCallbacks(reconnectTask);
+            stopAutomaticHandoff(); // Browsing another device cancels previous-device recovery.
             beginScan();
         });
         disconnectButton = button("Disconnect", false);
         disconnectButton.setOnClickListener(v -> {
+            stopAutomaticHandoff();
             manualDisconnect = true;
-            autoDiscoveryActive = false;
-            autoConnectHandler.removeCallbacks(reconnectTask);
             connecting = false;
             ble.disconnect();
             onStatus("Disconnected by user", false);
@@ -428,10 +431,27 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     }
 
     /** Requires complete BLE scan privileges; no physical location data is collected. */
+    /** Stop every scheduled saved-BMS fallback or recovery on explicit user action. */
+    private void stopAutomaticHandoff() {
+        userConnectionOverride = true;
+        autoDiscoveryActive = false;
+        autoDirectAttempted = true;
+        autoReconnectAddress = "";
+        reconnectRetries = 0;
+        autoConnectHandler.removeCallbacksAndMessages(null);
+    }
+
+    private void chooseDevice(String address) {
+        stopAutomaticHandoff();
+        requestedDeviceAddress = address;
+        manualDisconnect = false;
+        connecting = true;
+    }
+
     /** Launch scan, then reconnect to the last successfully connected BLE device. */
     private void beginAutomaticDiscovery() {
-        if (manualDisconnect || ble == null || ble.isReady()) return;
-        if (ble.isScanning()) return;
+        if (manualDisconnect || userConnectionOverride || connecting
+                || ble == null || ble.isReady() || ble.isScanning()) return;
         autoReconnectAddress = getPreferences(0).getString("last_bms", "");
         autoDiscoveryActive = true;
         autoDirectAttempted = false;
@@ -487,6 +507,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             manualMac.setError("Enter BLE address as XX:XX:XX:XX:XX:XX");
             return;
         }
+        // Cancel saved-device recovery before requesting permissions or Bluetooth.
+        // Those Android dialogs may take time, but the user's choice must persist.
+        chooseDevice(address);
         if (Build.VERSION.SDK_INT >= 31 &&
                 checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
             pendingDirectConnection = true;
@@ -500,12 +523,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             return;
         }
         pendingDirectConnection = false;
-        manualDisconnect = false;
-        autoDiscoveryActive = false;
-        autoConnectHandler.removeCallbacks(reconnectTask);
-        connecting = true;
-        scanHint.setText("Connecting directly without scanning…");
-        onLog("Connecting directly to saved BLE address");
+        scanHint.setText("Connecting to selected BLE address…");
+        onLog("Connecting directly to user-selected BLE address");
         ble.connectByAddress(address);
     }
 
@@ -526,11 +545,12 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         onLog("Scan requested on Android API " + Build.VERSION.SDK_INT
                 + ": Nearby devices / Location permissions granted, Bluetooth and Location ON");
         ble.scan();
-        if (autoDiscoveryActive && !autoReconnectAddress.isEmpty()) {
+        if (autoDiscoveryActive && !userConnectionOverride && !autoReconnectAddress.isEmpty()) {
             // Wait for actual advertisements (including legacy scan fallback) before
             // trying a direct connection. Limit startup delay if the BMS is hidden.
             autoConnectHandler.postDelayed(() -> {
-                if (autoDiscoveryActive && !connecting && ble.isScanning()) {
+                if (autoDiscoveryActive && !userConnectionOverride
+                        && !connecting && ble.isScanning()) {
                     onLog("Last BMS not advertised after 12 seconds; trying saved address");
                     ble.stopScan(); // onScanFinished performs the direct fallback.
                 }
@@ -668,17 +688,29 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             boolean wasConnected = bmsConnected;
             bmsConnected = ready;
             if (ready) {
-                connecting = false;
-                autoDiscoveryActive = false;
-                autoConnectHandler.removeCallbacks(reconnectTask);
-                reconnectRetries = 0;
-                manualDisconnect = false;
                 String address = ble.connectedAddress();
-                if (address != null && !address.isEmpty()) {
-                    getPreferences(0).edit().putString("last_bms", address).apply();
-                    if (manualMac != null) manualMac.setText(address);
+                // Merely scanning while the previous BMS is still connected is not
+                // proof that a newly selected BMS connected successfully.
+                boolean chosenDeviceReady = userConnectionOverride
+                        && !requestedDeviceAddress.isEmpty()
+                        && address != null
+                        && address.equalsIgnoreCase(requestedDeviceAddress);
+                if (!userConnectionOverride || chosenDeviceReady) {
+                    connecting = false;
+                    autoDiscoveryActive = false;
+                    autoConnectHandler.removeCallbacksAndMessages(null);
+                    reconnectRetries = 0;
+                    manualDisconnect = false;
+                    userConnectionOverride = false;
+                    requestedDeviceAddress = "";
+                    if (address != null && !address.isEmpty()) {
+                        getPreferences(0).edit().putString("last_bms", address).apply();
+                        if (manualMac != null) manualMac.setText(address);
+                    }
                 }
-            } else if (!message.startsWith("Scanning") && !ble.isScanning()) {
+            } else if (!ble.isScanning() && (message.startsWith("Disconnected")
+                    || message.startsWith("Could not connect")
+                    || message.contains("timed out"))) {
                 connecting = false;
             }
             connection.setText(ready ? "●  Connected to BMS" : "○  " + message);
@@ -687,7 +719,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             if (wasConnected && !ready) {
                 // A dropped connection gets at most two recovery scans. Manual
                 // disconnect never schedules reconnection, preventing retry loops.
-                if (!manualDisconnect && reconnectRetries < 2) {
+                if (!manualDisconnect && !userConnectionOverride
+                        && !connecting && reconnectRetries < 2) {
                     reconnectRetries++;
                     autoConnectHandler.removeCallbacks(reconnectTask);
                     autoConnectHandler.postDelayed(reconnectTask, 2500L * reconnectRetries);
@@ -760,7 +793,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     @Override public void onDevice(BluetoothDevice device, String name, int rssi, boolean likelyBms) {
         runOnUiThread(() -> {
             String address = device.getAddress();
-            if (autoDiscoveryActive && !manualDisconnect && !ble.isReady()
+            if (autoDiscoveryActive && !userConnectionOverride && !manualDisconnect && !ble.isReady()
                     && !connecting && address.equalsIgnoreCase(autoReconnectAddress)) {
                 autoDiscoveryActive = false;
                 connecting = true;
@@ -791,10 +824,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             item.addView(details, detailSize);
             Button connect = button("Connect", likelyBms);
             connect.setOnClickListener(v -> {
-                manualDisconnect = false;
-                autoDiscoveryActive = false;
-                autoConnectHandler.removeCallbacks(reconnectTask);
-                connecting = true;
+                chooseDevice(address);
                 ble.stopScan();
                 deviceList.removeAllViews();
                 deviceList.addView(text("Connecting to " + name + "…", 13, CYAN, true));
@@ -817,7 +847,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             scanButton.setEnabled(true);
             scanButton.setText("Scan for devices");
             progress.setVisibility(View.GONE);
-            if (connecting || ble.isReady()) return;
+            if (connecting || ble.isReady() || userConnectionOverride) return;
             if (autoDiscoveryActive) {
                 autoDiscoveryActive = false;
                 if (!autoDirectAttempted && !autoReconnectAddress.isEmpty()) {
