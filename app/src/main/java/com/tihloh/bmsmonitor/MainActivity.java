@@ -13,6 +13,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.graphics.Color;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.location.LocationManager;
@@ -37,16 +38,23 @@ import android.app.NotificationManager;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.HashSet;
+import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.Locale;
 import java.util.Set;
 
 public final class MainActivity extends Activity implements BleClient.Listener, ReleaseUpdater.Callback {
     private static final int PERMISSIONS = 10, BLUETOOTH_ENABLE = 11;
-    private static final int NAVY = Color.rgb(27, 43, 58);
-    private static final int MUTED = Color.rgb(99, 116, 132);
-    private static final int CYAN = Color.rgb(0, 124, 145);
-    private static final int BACK = Color.rgb(242, 247, 249);
-    private static final int BORDER = Color.rgb(222, 231, 236);
+    private static final int PRIMARY_TEXT = 1, MUTED_TEXT = 2, ACCENT_TEXT = 3;
+    private static final int DEVICE_FOUND = 1, DEVICE_OTHER = 2, CELL_SURFACE = 3;
+    private int NAVY, MUTED, CYAN, BACK, BORDER;
+    private MonitorTheme uiTheme;
+    // Weak keys allow scan and cell views to be collected as data changes.
+    private final Map<TextView, Integer> textRoles = new WeakHashMap<>();
+    private final Map<Button, Boolean> buttonRoles = new WeakHashMap<>();
+    private final Map<LinearLayout, Boolean> panelRoles = new WeakHashMap<>();
+    private final Map<View, Integer> surfaceRoles = new WeakHashMap<>();
+    private TextView themeSummary;
     private final Set<String> discovered = new HashSet<>();
     private BleClient ble;
     private ReleaseUpdater updater;
@@ -105,8 +113,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        getWindow().setStatusBarColor(NAVY);
-        getWindow().setNavigationBarColor(NAVY);
+        loadThemePalette();
         ble = new BleClient(this, this);
         updater = new ReleaseUpdater(this, this);
         drawUi();
@@ -207,7 +214,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         scanHint = text("Scan shows all Bluetooth LE devices. Grant Nearby devices and precise Location when prompted.", 12, MUTED, false);
         scanCard.addView(scanHint, below(0, 7));
         Button permissionsHelp = button("Permissions / Location settings", false);
-        permissionsHelp.setOnClickListener(v -> new AlertDialog.Builder(this)
+        permissionsHelp.setOnClickListener(v -> themedDialog()
                 .setTitle("Make Bluetooth scanning work")
                 .setMessage("Allow Nearby devices and precise Location; turn on Bluetooth and the Location switch. The app does not request your GPS position. Disconnect Gentai or nRF Connect before connecting.")
                 .setPositiveButton("App permissions", (d, w) -> startActivity(
@@ -227,7 +234,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         manualMac.setText(getPreferences(0).getString("last_bms", ""));
         manualMac.setSelectAllOnFocus(true);
         manualMac.setPadding(dp(9), 0, dp(9), 0);
-        manualMac.setBackground(background(Color.rgb(232, 240, 244), 10, 0));
+        manualMac.setTextColor(NAVY);
+        manualMac.setHintTextColor(MUTED);
+        manualMac.setBackground(background(uiTheme.input, 10, 0));
         LinearLayout.LayoutParams edit = new LinearLayout.LayoutParams(0, dp(44), 1);
         edit.rightMargin = dp(7);
         directRow.addView(manualMac, edit);
@@ -304,6 +313,16 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         cellList.addView(text("Awaiting a supported response from the BMS.", 12, MUTED, false));
         cells.addView(cellList, below(0, 9));
         dashboardView.addView(cells, below(0, 10));
+
+        LinearLayout appearancePanel = panel();
+        appearancePanel.addView(text("Appearance", 15, NAVY, true));
+        themeSummary = text("Theme: " + MonitorTheme.LABELS[MonitorTheme.selected(this)],
+                13, MUTED, false);
+        appearancePanel.addView(themeSummary, below(0, 5));
+        Button pickTheme = button("Choose app theme", false);
+        pickTheme.setOnClickListener(v -> chooseTheme());
+        appearancePanel.addView(pickTheme, below(0, 9));
+        aboutView.addView(appearancePanel, below(0, 10));
 
         LinearLayout updatePanel = panel();
         updatePanel.addView(text("App updates", 15, NAVY, true));
@@ -424,8 +443,8 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         Button[] tabs = {dashboardTab, connectionTab, aboutTab};
         for (int i = 0; i < tabs.length; i++) {
             boolean selected = i == page;
-            tabs[i].setTextColor(selected ? Color.WHITE : NAVY);
-            tabs[i].setBackground(background(selected ? CYAN : Color.rgb(232, 240, 244), 11, 0));
+            tabs[i].setTextColor(selected ? uiTheme.onAccent : NAVY);
+            tabs[i].setBackground(background(selected ? CYAN : uiTheme.soft, 11, 0));
         }
         if (mainScroll != null) mainScroll.smoothScrollTo(0, 0);
     }
@@ -491,7 +510,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                    || location.isProviderEnabled(LocationManager.NETWORK_PROVIDER)));
         if (!locationOn) {
             status.setText("Turn on the phone's Location switch to scan.");
-            new AlertDialog.Builder(this).setTitle("Turn on Location")
+            themedDialog().setTitle("Turn on Location")
                     .setMessage("Some Android versions return no Bluetooth scan results when Location is off. The monitor does not read your GPS position.")
                     .setPositiveButton("Location settings", (d, w) -> startActivity(
                             new Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)))
@@ -619,7 +638,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                     .remove("last_install_error").apply();
             showPage(2);
             if (firmwareHint != null) firmwareHint.setText("Last update failed. See details below.");
-            new AlertDialog.Builder(this).setTitle("Update could not be installed")
+            themedDialog().setTitle("Update could not be installed")
                     .setMessage(lastError)
                     .setPositiveButton("OK", null).show();
         }
@@ -644,14 +663,14 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             long wait = connectedSinceMs > 0 ? now - connectedSinceMs : 0;
             boolean delayed = wait >= 12000;
             liveIndicator.setText(delayed ? "NO TELEMETRY" : "WAITING FOR DATA");
-            liveIndicator.setTextColor(delayed ? Color.rgb(174, 98, 0) : MUTED);
+            liveIndicator.setTextColor(delayed ? uiTheme.warning : MUTED);
             updated.setText(delayed ? "Connected, but no valid battery readings yet" :
                     "Waiting for the first BMS response…");
         } else {
             long age = Math.max(0, now - lastBasicReadingMs);
             boolean live = age < 8000;
             liveIndicator.setText(live ? "● LIVE" : "● STALE");
-            liveIndicator.setTextColor(live ? CYAN : Color.rgb(174, 98, 0));
+            liveIndicator.setTextColor(live ? CYAN : uiTheme.warning);
             updated.setText((live ? telemetryCondition : "Readings are not updating") +
                     "  •  " + ageLabel(age));
         }
@@ -666,7 +685,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 long age = Math.max(0, now - lastDetailsReadingMs);
                 detailsAge.setText((age < 10000 ? "Extended readings " : "Extended readings stale · ")
                         + ageLabel(age));
-                detailsAge.setTextColor(age < 10000 ? MUTED : Color.rgb(174, 98, 0));
+                detailsAge.setTextColor(age < 10000 ? MUTED : uiTheme.warning);
             }
         }
         if (cellFreshness != null) {
@@ -675,7 +694,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 long age = Math.max(0, now - lastCellsReadingMs);
                 cellFreshness.setText((age < 20000 ? "Cells updated " : "Cell data stale · ") +
                         ageLabel(age));
-                cellFreshness.setTextColor(age < 20000 ? MUTED : Color.rgb(174, 98, 0));
+                cellFreshness.setTextColor(age < 20000 ? MUTED : uiTheme.warning);
             }
         }
     }
@@ -813,9 +832,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             if (visibleCount > 36 && !likelyBms) return;
             LinearLayout item = horizontal();
             item.setPadding(dp(8), dp(8), dp(8), dp(8));
-            item.setBackground(background(
-                    likelyBms ? Color.rgb(231, 248, 245) : Color.rgb(248, 250, 252),
-                    10, BORDER));
+            paintSurface(item, likelyBms ? DEVICE_FOUND : DEVICE_OTHER);
             LinearLayout details = vertical();
             details.addView(text(name + (likelyBms ? "  •  BMS" : ""), 14, NAVY, likelyBms));
             details.addView(text(address + "  ·  " + rssi + " dBm", 11, MUTED, false), below(0, 3));
@@ -922,7 +939,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
             setDetail(batteryTemperature, "Temperatures",
                     temps.length == 0 ? "No sensors reported" : android.text.TextUtils.join(" · ", temps));
             setDetail(protectionStatus, "Active protections", b.protectionSummary());
-            protectionStatus.setTextColor(b.protectionFlags != 0 ? Color.rgb(174, 98, 0) : NAVY);
+            protectionStatus.setTextColor(b.protectionFlags != 0 ? uiTheme.warning : NAVY);
             setDetail(mosCharge, "Charge MOSFET", b.chargeMosOn ? "ON" : "OFF");
             setDetail(mosDischarge, "Discharge MOSFET", b.dischargeMosOn ? "ON" : "OFF");
             setDetail(balancingStatus, "Balancing", b.activeBalancingCells());
@@ -988,7 +1005,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
                 for (int k = i; k < Math.min(i + 4, cells.length); k++) {
                     TextView t = text(String.format(Locale.US, "%02d\n%.3f V", k+1, cells[k]), 12, NAVY, true);
                     t.setGravity(Gravity.CENTER);
-                    t.setBackground(background(Color.rgb(235, 248, 250), 9, 0));
+                    paintSurface(t, CELL_SURFACE);
                     LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(58), 1);
                     lp.setMargins(dp(2), dp(2), dp(2), dp(2));
                     row.addView(t, lp);
@@ -1016,6 +1033,93 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         onLog("Available GitHub version: " + version);
     }
 
+    private void loadThemePalette() {
+        uiTheme = MonitorTheme.resolve(this);
+        NAVY = uiTheme.primary;
+        MUTED = uiTheme.muted;
+        CYAN = uiTheme.accent;
+        BACK = uiTheme.background;
+        BORDER = uiTheme.border;
+        getWindow().setStatusBarColor(uiTheme.systemBar);
+        getWindow().setNavigationBarColor(uiTheme.systemBar);
+    }
+
+    private AlertDialog.Builder themedDialog() {
+        return new AlertDialog.Builder(this, uiTheme.dark
+                ? android.R.style.Theme_Material_Dialog_Alert
+                : android.R.style.Theme_Material_Light_Dialog_Alert);
+    }
+
+    private void chooseTheme() {
+        themedDialog()
+                .setTitle("App theme")
+                .setSingleChoiceItems(MonitorTheme.LABELS, MonitorTheme.selected(this),
+                        (dialog, choice) -> {
+                            MonitorTheme.select(this, choice);
+                            applyTheme();
+                            dialog.dismiss();
+                        })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    /** Repaint existing views without re-creating the Activity or dropping GATT. */
+    private void applyTheme() {
+        loadThemePalette();
+        if (mainScroll != null) mainScroll.setBackgroundColor(BACK);
+        if (themeSummary != null) themeSummary.setText(
+                "Theme: " + MonitorTheme.LABELS[MonitorTheme.selected(this)]);
+        for (Map.Entry<TextView, Integer> e : textRoles.entrySet()) {
+            TextView view = e.getKey();
+            if (view == null) continue;
+            int role = e.getValue();
+            view.setTextColor(role == MUTED_TEXT ? MUTED : role == ACCENT_TEXT ? CYAN : NAVY);
+        }
+        for (LinearLayout panel : panelRoles.keySet())
+            if (panel != null) panel.setBackground(background(uiTheme.surface, 15, BORDER));
+        for (Map.Entry<Button, Boolean> e : buttonRoles.entrySet()) {
+            Button button = e.getKey();
+            if (button == null) continue;
+            boolean primary = e.getValue();
+            button.setTextColor(primary ? uiTheme.onAccent : NAVY);
+            button.setBackground(background(primary ? CYAN : uiTheme.soft, 11, 0));
+        }
+        for (Map.Entry<View, Integer> e : surfaceRoles.entrySet())
+            if (e.getKey() != null) styleSurface(e.getKey(), e.getValue());
+        if (manualMac != null) {
+            manualMac.setBackground(background(uiTheme.input, 10, 0));
+            manualMac.setTextColor(NAVY);
+            manualMac.setHintTextColor(MUTED);
+        }
+        if (notificationSwitch != null) {
+            notificationSwitch.setTextColor(NAVY);
+            notificationSwitch.setThumbTintList(ColorStateList.valueOf(
+                    notificationSwitch.isChecked() ? CYAN : MUTED));
+        }
+        if (progress != null) progress.setIndeterminateTintList(ColorStateList.valueOf(CYAN));
+        if (connection != null) connection.setTextColor(bmsConnected ? CYAN : NAVY);
+        Button[] tabs = {dashboardTab, connectionTab, aboutTab};
+        for (int i = 0; i < tabs.length; i++) {
+            if (tabs[i] == null) continue;
+            boolean active = currentPage == i;
+            tabs[i].setTextColor(active ? uiTheme.onAccent : NAVY);
+            tabs[i].setBackground(background(active ? CYAN : uiTheme.soft, 11, 0));
+        }
+        updateLiveIndicator();
+    }
+
+    private void paintSurface(View view, int role) {
+        surfaceRoles.put(view, role);
+        styleSurface(view, role);
+    }
+
+    private void styleSurface(View view, int role) {
+        int color = role == DEVICE_FOUND ? uiTheme.found
+                : role == DEVICE_OTHER ? uiTheme.ordinary : uiTheme.cell;
+        view.setBackground(background(color, role == CELL_SURFACE ? 9 : 10,
+                role == CELL_SURFACE ? 0 : BORDER));
+    }
+
     private LinearLayout vertical() {
         LinearLayout layout = new LinearLayout(this);
         layout.setOrientation(LinearLayout.VERTICAL);
@@ -1030,8 +1134,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
     private LinearLayout panel() {
         LinearLayout card = vertical();
         card.setPadding(dp(15), dp(14), dp(15), dp(14));
-        card.setBackground(background(Color.WHITE, 15, BORDER));
+        card.setBackground(background(uiTheme.surface, 15, BORDER));
         card.setElevation(dp(1));
+        panelRoles.put(card, Boolean.TRUE);
         return card;
     }
     private LinearLayout metric(String name, String firstValue) {
@@ -1044,6 +1149,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         TextView t = new TextView(this);
         t.setText(label); t.setTextSize(sp); t.setTextColor(color);
         if (bold) t.setTypeface(Typeface.DEFAULT, Typeface.BOLD);
+        if (color == NAVY) textRoles.put(t, PRIMARY_TEXT);
+        else if (color == MUTED) textRoles.put(t, MUTED_TEXT);
+        else if (color == CYAN) textRoles.put(t, ACCENT_TEXT);
         return t;
     }
     private Button button(String label, boolean primary) {
@@ -1051,10 +1159,11 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         b.setText(label);
         b.setTextSize(13);
         b.setAllCaps(false);
-        b.setTextColor(primary ? Color.WHITE : NAVY);
-        b.setBackground(background(primary ? CYAN : Color.rgb(232, 240, 244), 11, 0));
+        b.setTextColor(primary ? uiTheme.onAccent : NAVY);
+        b.setBackground(background(primary ? CYAN : uiTheme.soft, 11, 0));
         b.setPadding(dp(9), dp(4), dp(9), dp(4));
         b.setMinHeight(dp(44));
+        buttonRoles.put(b, primary);
         return b;
     }
     private GradientDrawable background(int fill, int radius, int stroke) {
