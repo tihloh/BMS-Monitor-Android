@@ -204,6 +204,7 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         LinearLayout scanRow = horizontal();
         progress = new ProgressBar(this);
         progress.setIndeterminate(true);
+        progress.setIndeterminateTintList(ColorStateList.valueOf(CYAN));
         progress.setVisibility(View.GONE);
         LinearLayout.LayoutParams progressLp = new LinearLayout.LayoutParams(dp(20), dp(20));
         progressLp.rightMargin = dp(8);
@@ -419,6 +420,9 @@ public final class MainActivity extends Activity implements BleClient.Listener, 
         notificationSwitch.setChecked(preferred && allowed);
         notificationSwitch.setText(preferred && allowed ? "Update notifications enabled" :
                 preferred ? "Update notifications blocked in Android settings" : "Update notifications disabled");
+        notificationSwitch.setTextColor(NAVY);
+        notificationSwitch.setThumbTintList(ColorStateList.valueOf(
+                preferred && allowed ? CYAN : MUTED));
         notificationSwitch.setOnCheckedChangeListener((view, checked) -> {
             getSharedPreferences("bms_updates", MODE_PRIVATE).edit()
                     .putBoolean("notifications_enabled", checked).apply();
